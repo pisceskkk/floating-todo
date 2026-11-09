@@ -61,19 +61,63 @@ async function boot(page, { width = 340, height = 560, scale = 1, selectedDay = 
 }
 const mode = (page, value) => expect(page.locator('html')).toHaveAttribute('data-window-mode', value);
 const snapshot = page => page.evaluate(key => JSON.parse(localStorage.getItem(key)), KEY);
-test('recent preview stacks three tasks then expands and opens their day', async ({ page }, testInfo) => {
+test('recent preview stacks compact cards and completes tasks in place', async ({ page }, testInfo) => {
   await boot(page); await collapse(page);
   await page.locator('.mini-peek').click(); await mode(page, 'stack');
   await expect(page.locator('.mini-task strong')).toHaveText(['待办 1', '待办 2', '准备评审']);
   await expect(page.locator('.mini-task[aria-hidden="true"]')).toHaveCount(2);
-  await expect.poll(() => page.viewportSize().height).toBe(164);
+  await expect.poll(() => page.viewportSize().height).toBe(140);
   await page.screenshot({ path: testInfo.outputPath('stack.png'), omitBackground: true });
-  await page.locator('.mini-task').first().click(); await mode(page, 'tasks');
+  await page.locator('.mini-task-body').first().click(); await mode(page, 'tasks');
   await expect(page.locator('.mini-task[aria-hidden]')).toHaveCount(0);
-  await expect.poll(() => page.viewportSize().height).toBe(300);
+  await expect.poll(() => page.viewportSize().height).toBe(234);
   await page.screenshot({ path: testInfo.outputPath('expanded.png'), omitBackground: true });
-  await page.locator('.mini-task').last().click(); await mode(page, 'panel');
-  await expect(page.locator('.day-seg.sel')).toContainText('明天');
+  await page.locator('.mini-task-body').last().click(); await mode(page, 'tasks');
+  await page.locator('.mini-complete').last().click(); await mode(page, 'tasks');
+  await expect(page.locator('.mini-task strong')).toHaveText(['待办 1', '待办 2']);
+  expect((await snapshot(page)).itemsByDay.tomorrow[0].completed).toBe(true);
+  expect((await snapshot(page)).selectedDay).toBe('today');
+  await page.locator('.mini-complete').first().press('Enter');
+  await page.locator('.mini-complete').first().press('Space');
+  await expect(page.locator('.mini-empty')).toBeVisible();
+  await expect(page.locator('.mini-peek')).toBeFocused();
+  await expect(page.locator('.mini-count strong')).toHaveText('0');
+});
+
+test('stack completion promotes the next task and replenishes the three-card preview', async ({ page }) => {
+  await boot(page, { taskCount: 4 }); await collapse(page);
+  await page.locator('.mini-peek').click(); await mode(page, 'stack');
+  await page.locator('.mini-complete').first().click(); await mode(page, 'stack');
+  await expect(page.locator('.mini-task strong')).toHaveText(['待办 2', '待办 3', '待办 4']);
+  await expect(page.locator('.mini-task[inert]')).toHaveCount(2);
+  await expect(page.locator('.mini-count strong')).toHaveText('3');
+  await page.reload();
+  expect((await snapshot(page)).itemsByDay.today.find(item => item.id === 'task-0').completed).toBe(true);
+});
+
+test('mini cards share panel materials and compact controls across themes and opacity levels', async ({ page }, testInfo) => {
+  await boot(page); await collapse(page); await page.locator('.mini-peek').click();
+  for (const theme of ['light', 'dark']) for (const opacity of ['0.4', '0.9']) {
+    await page.evaluate(({ theme, opacity }) => {
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.setProperty('--opacity', opacity);
+    }, { theme, opacity });
+    const styles = await page.evaluate(() => {
+      const card = document.querySelector('.mini-task');
+      const material = getComputedStyle(card, '::before');
+      const panel = getComputedStyle(document.querySelector('.panel'), '::before');
+      const add = getComputedStyle(document.querySelector('.mini-add'));
+      const peek = getComputedStyle(document.querySelector('.mini-peek'));
+      return { width: card.offsetWidth, height: card.offsetHeight, background: material.backgroundImage,
+        panelBackground: panel.backgroundImage, blur: material.backdropFilter, panelBlur: panel.backdropFilter,
+        buttons: [add.width, peek.width, add.borderRadius, peek.borderRadius] };
+    });
+    expect(styles.width).toBe(256); expect(styles.height).toBe(48);
+    expect(styles.background).toBe(styles.panelBackground);
+    expect(styles.blur).toBe(styles.panelBlur);
+    expect(styles.buttons).toEqual(['32px', '32px', '50%', '50%']);
+    await page.screenshot({ path: testInfo.outputPath(`stack-${theme}-${opacity}.png`), omitBackground: true });
+  }
 });
 
 for (const right of [false, true]) for (const bottom of [false, true]) {
@@ -88,7 +132,7 @@ for (const right of [false, true]) for (const bottom of [false, true]) {
       await page.locator(trigger).click();
       await expect(page.locator('html')).toHaveAttribute('data-expand-x', right ? 'left' : 'right');
       await expect(page.locator('html')).toHaveAttribute('data-expand-y', bottom ? 'up' : 'down');
-      await expect.poll(() => page.viewportSize().width).toBe(340);
+      await expect.poll(() => page.viewportSize().width).toBe(trigger === '.mini-add' ? 340 : 280);
       const bar = await page.locator('.mini-bar').boundingBox();
       const frame = await page.evaluate(() => ({ x: __native.x, y: __native.y }));
       expect(frame.x + bar.x).toBe(origin.x + 12);

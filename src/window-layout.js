@@ -4,8 +4,8 @@ export const PANEL_MAX = { width: 460, height: 760 };
 // Sizes include the 12px transparent shadow gutter on each edge.
 export const BAR_SIZE = { width: 188, height: 68 };
 export const CAPTURE_SIZE = { width: 340, height: 252 };
-export const STACK_SIZE = { width: 340, height: 164 };
-export const TASKS_SIZE = { width: 340, height: 300 };
+export const STACK_SIZE = { width: 280, height: 140 };
+export const TASKS_SIZE = { width: 280, height: 234 };
 
 // Choose the roomier side of the bar, preserving its screen position.
 export function floatingBounds(bar, size, area, direction) {

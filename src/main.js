@@ -603,9 +603,10 @@ function renderFloating(restoreInput) {
     <div class="quick-error" role="alert" ${quickError ? '' : 'hidden'}>${esc(quickError)}</div>
     <div class="quick-footer"><select id="quick-day" aria-label="新待办的日期">${DAYS.map(day => `<option value="${day}" ${day === quickDay ? 'selected' : ''}>${DAY_TITLE[day]}</option>`).join('')}</select><span>Enter 添加</span><button class="send" data-act="quick-submit" aria-label="保存待办" ${quickDraft.trim() ? '' : 'disabled'}>${ICONS.arrowUp}</button></div>
   </section>` : preview ? `<section class="mini-tasks ${expanded ? 'expanded' : 'stacked'}" aria-label="最近三个任务">
-    ${recent.length ? recent.map((item, index) => `<button class="mini-task" style="--stack-index:${index}" data-act="${expanded ? 'mini-open-task' : 'peek'}" data-day="${item.day}" ${!expanded && index > 0 ? 'aria-hidden="true" tabindex="-1"' : ''}>
-      <strong>${esc(item.title)}</strong><span>${DAY_TITLE[item.day]}${item.time ? ' · ' + esc(item.time) : ''}${item.detail ? ' · ' + esc(item.detail) : ''}</span>
-    </button>`).join('') : '<div class="mini-empty">今明后三天暂无待办</div>'}
+    ${recent.length ? recent.map((item, index) => `<article class="mini-task" style="--stack-index:${index}" ${!expanded && index > 0 ? 'aria-hidden="true" inert' : ''}>
+      <button class="check mini-complete" data-act="mini-complete" data-id="${esc(item.id)}" data-day="${item.day}" aria-label="完成：${esc(item.title)}" title="完成任务">${ICONS.check}</button>
+      ${expanded ? '<div class="mini-task-body">' : '<button class="mini-task-body" data-act="peek" aria-label="展开最近任务">'}<strong>${esc(item.title)}</strong><span>${DAY_TITLE[item.day]}${item.time ? ' · ' + esc(item.time) : ''}${item.detail ? ' · ' + esc(item.detail) : ''}</span>${expanded ? '</div>' : '</button>'}
+    </article>`).join('') : '<div class="mini-empty" role="status">今明后三天暂无待办</div>'}
   </section>` : ''}`;
   app.querySelector('.mini-bar').addEventListener('mousedown', onDragStart);
   classificationUI.afterRender();
@@ -838,7 +839,13 @@ app.addEventListener("click", (e) => {
     case "raddsubmit": commitRecur(); break;
     case "expand": expandWindow(); break;
     case "peek": toggleRecentTasks(); break;
-    case "mini-open-task": state.selectedDay = day; listScrollTop = 0; save(); expandWindow(); break;
+    case "mini-complete": {
+      const task = state.itemsByDay[day]?.find(item => item.id === id);
+      if (task && !task.completed) toggleItem(id, day);
+      render();
+      (app.querySelector('.mini-complete') || app.querySelector('.mini-peek'))?.focus({ preventScroll: true });
+      break;
+    }
     case "collapse": collapseWindow(); break;
     case "quick-toggle": windowUI.mode === 'quick' ? closeQuickCapture() : openQuickCapture(); break;
     case "quick-close": closeQuickCapture(); break;
