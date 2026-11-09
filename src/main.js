@@ -1,7 +1,7 @@
 /* 悬浮待办 · 跨平台前端逻辑 (Tauri v2 + 原生 JS) */
 import { SCHEMA_VERSION, normalizeSnapshot, parseClassification, resolveClassification, editText } from './classification.js';
 import { createClassificationUI } from './classification-ui.js';
-import { reorderVisibleItems } from './todo-order.js';
+import { reorderVisibleItems, recentTasks } from './todo-order.js';
 import { createWindowController } from './window-controller.js';
 import { SyncStore } from './sync-store.js';
 import { dateInZone, shiftDate, setTaskOrder } from './sync-model.js';
@@ -448,6 +448,9 @@ function render() {
   rollOverIfNeeded();
   applyWindowChrome();
   document.documentElement.dataset.windowMode = windowUI.mode;
+  document.documentElement.dataset.floating = String(windowUI.floating);
+  document.documentElement.dataset.expandX = windowUI.direction.horizontal;
+  document.documentElement.dataset.expandY = windowUI.direction.vertical;
   if (!windowUI.transitioning && app.querySelector('.list')) listScrollTop = app.querySelector('.list').scrollTop;
   if (windowUI.floating) {
     renderFloating(restoreInput);
@@ -584,17 +587,25 @@ let listScrollTop = 0;
 function renderFloating(restoreInput) {
   const count = incompleteCount();
   const capturing = windowUI.mode === 'quick';
+  const preview = ['stack', 'tasks'].includes(windowUI.mode);
+  const expanded = windowUI.mode === 'tasks';
+  const recent = recentTasks(state.itemsByDay);
   app.innerHTML = `<div class="mini-bar" aria-label="悬浮待办栏">
     <span class="mini-grip" title="拖动悬浮栏" aria-hidden="true">${ICONS.grip}</span>
     <button class="mini-count ${count === 0 ? 'zero' : ''}" data-act="expand" title="展开待办面板" aria-label="${DAY_TITLE[state.selectedDay]} ${count} 件待办，展开完整面板"><span>${DAY_TITLE[state.selectedDay]}</span><strong>${count > 99 ? '99+' : count}</strong></button>
     <span class="mini-divider" aria-hidden="true"></span>
     <button class="mini-add" data-act="quick-toggle" title="快速新增待办" aria-label="快速新增待办" aria-expanded="${capturing}">${ICONS.plus}</button>
+    <button class="mini-peek" data-act="peek" title="${preview ? expanded ? '收起最近任务' : '展开三个任务' : '查看最近任务'}" aria-label="${preview ? expanded ? '收起最近任务' : '展开三个任务' : '查看最近任务'}" aria-expanded="${preview}">${ICONS.chevron}</button>
     <span class="mini-sr-only" role="status">${esc(quickMessage)}</span>
   </div>${capturing ? `<section class="quick-capture" aria-label="快速新增待办">
     <div class="quick-heading"><span>记下一件事</span><button class="icon-btn sm" data-act="quick-close" aria-label="收起输入框" title="收起并保留草稿">${ICONS.x}</button></div>
     <div class="composer quick-composer"><input id="quick-input" placeholder="接下来要做什么？" value="${esc(quickDraft)}" /></div>
     <div class="quick-error" role="alert" ${quickError ? '' : 'hidden'}>${esc(quickError)}</div>
     <div class="quick-footer"><select id="quick-day" aria-label="新待办的日期">${DAYS.map(day => `<option value="${day}" ${day === quickDay ? 'selected' : ''}>${DAY_TITLE[day]}</option>`).join('')}</select><span>Enter 添加</span><button class="send" data-act="quick-submit" aria-label="保存待办" ${quickDraft.trim() ? '' : 'disabled'}>${ICONS.arrowUp}</button></div>
+  </section>` : preview ? `<section class="mini-tasks ${expanded ? 'expanded' : 'stacked'}" aria-label="最近三个任务">
+    ${recent.length ? recent.map((item, index) => `<button class="mini-task" style="--stack-index:${index}" data-act="${expanded ? 'mini-open-task' : 'peek'}" data-day="${item.day}" ${!expanded && index > 0 ? 'aria-hidden="true" tabindex="-1"' : ''}>
+      <strong>${esc(item.title)}</strong><span>${DAY_TITLE[item.day]}${item.time ? ' · ' + esc(item.time) : ''}${item.detail ? ' · ' + esc(item.detail) : ''}</span>
+    </button>`).join('') : '<div class="mini-empty">今明后三天暂无待办</div>'}
   </section>` : ''}`;
   app.querySelector('.mini-bar').addEventListener('mousedown', onDragStart);
   classificationUI.afterRender();
@@ -826,6 +837,8 @@ app.addEventListener("click", (e) => {
     case "raddtoggle": recurringComposerOpen = !recurringComposerOpen; focusRecur = recurringComposerOpen; render(); break;
     case "raddsubmit": commitRecur(); break;
     case "expand": expandWindow(); break;
+    case "peek": toggleRecentTasks(); break;
+    case "mini-open-task": state.selectedDay = day; listScrollTop = 0; save(); expandWindow(); break;
     case "collapse": collapseWindow(); break;
     case "quick-toggle": windowUI.mode === 'quick' ? closeQuickCapture() : openQuickCapture(); break;
     case "quick-close": closeQuickCapture(); break;
@@ -869,6 +882,19 @@ app.addEventListener("keydown", (e) => {
     else collapseWindow();
   }
   if (e.key === 'Escape' && windowUI.mode === 'quick') { e.preventDefault(); closeQuickCapture(); }
+});
+
+async function toggleRecentTasks() {
+  if (await windowUI.setMode(windowUI.mode === 'stack' ? 'tasks' : windowUI.mode === 'tasks' ? 'mini' : 'stack')) {
+    app.querySelector('.mini-peek')?.focus({ preventScroll: true });
+  }
+}
+
+document.addEventListener('keydown', async e => {
+  if (e.key === 'Escape' && ['stack', 'tasks'].includes(windowUI.mode)) {
+    e.preventDefault();
+    if (await windowUI.setMode('mini')) app.querySelector('.mini-peek')?.focus({ preventScroll: true });
+  }
 });
 
 function commitMain() {

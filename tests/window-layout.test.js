@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { anchoredBounds, southwestResize, BAR_SIZE, PANEL_DEFAULT } from '../src/window-layout.js';
+import { anchoredBounds, floatingBounds, southwestResize, BAR_SIZE, PANEL_DEFAULT, CAPTURE_SIZE } from '../src/window-layout.js';
+
+for (const scale of [1, 1.25, 1.5, 2]) {
+  for (const horizontal of ['left', 'right']) for (const vertical of ['up', 'down']) {
+    test(`floating ${horizontal}/${vertical} retains bar anchor at ${scale} DPI`, () => {
+      const area = { position: { x: -1920 * scale, y: -100 * scale }, size: { width: 1920 * scale, height: 1080 * scale } };
+      const bar = { x: Math.round((horizontal === 'right' ? -1910 : -198) * scale), y: Math.round((vertical === 'down' ? -90 : 902) * scale), width: 188 * scale, height: 68 * scale, scale };
+      const { bounds, direction } = floatingBounds(bar, CAPTURE_SIZE, area);
+      assert.deepEqual(direction, { horizontal, vertical });
+      assert.equal(horizontal === 'left' ? bounds.x + bounds.width : bounds.x, horizontal === 'left' ? bar.x + bar.width : bar.x);
+      assert.equal(vertical === 'up' ? bounds.y + bounds.height : bounds.y, vertical === 'up' ? bar.y + bar.height : bar.y);
+      assert.ok(bounds.x >= area.position.x && bounds.y >= area.position.y);
+      assert.ok(bounds.x + bounds.width <= 0 && bounds.y + bounds.height <= 980 * scale);
+    });
+  }
+}
 
 for (const scale of [1, 1.25, 1.5, 2]) {
   test(`southwest gesture requires both midlines at ${scale * 100}% scale`, () => {

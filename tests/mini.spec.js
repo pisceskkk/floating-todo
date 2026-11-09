@@ -45,7 +45,7 @@ async function boot(page, { width = 340, height = 560, scale = 1, selectedDay = 
       } },
       event: { listen: (name, cb) => { native.listeners[name] = cb; return Promise.resolve(() => {}); } },
       window: { getCurrentWindow: () => win, PhysicalSize, PhysicalPosition, LogicalSize,
-        currentMonitor: async () => ({ workArea: { position: { x: -2000, y: 0 }, size: { width: 6000, height: 3000 } } }),
+        currentMonitor: async () => ({ workArea: native.workArea || { position: { x: -2000, y: 0 }, size: { width: 6000, height: 3000 } } }),
         cursorPosition: async () => {
           if (native.pauseCursor) {
             native.pauseCursor = false;
@@ -61,6 +61,46 @@ async function boot(page, { width = 340, height = 560, scale = 1, selectedDay = 
 }
 const mode = (page, value) => expect(page.locator('html')).toHaveAttribute('data-window-mode', value);
 const snapshot = page => page.evaluate(key => JSON.parse(localStorage.getItem(key)), KEY);
+test('recent preview stacks three tasks then expands and opens their day', async ({ page }, testInfo) => {
+  await boot(page); await collapse(page);
+  await page.locator('.mini-peek').click(); await mode(page, 'stack');
+  await expect(page.locator('.mini-task strong')).toHaveText(['待办 1', '待办 2', '准备评审']);
+  await expect(page.locator('.mini-task[aria-hidden="true"]')).toHaveCount(2);
+  await expect.poll(() => page.viewportSize().height).toBe(164);
+  await page.screenshot({ path: testInfo.outputPath('stack.png'), omitBackground: true });
+  await page.locator('.mini-task').first().click(); await mode(page, 'tasks');
+  await expect(page.locator('.mini-task[aria-hidden]')).toHaveCount(0);
+  await expect.poll(() => page.viewportSize().height).toBe(300);
+  await page.screenshot({ path: testInfo.outputPath('expanded.png'), omitBackground: true });
+  await page.locator('.mini-task').last().click(); await mode(page, 'panel');
+  await expect(page.locator('.day-seg.sel')).toContainText('明天');
+});
+
+for (const right of [false, true]) for (const bottom of [false, true]) {
+  test(`floating editor and tasks preserve bar at ${right ? 'right' : 'left'} ${bottom ? 'bottom' : 'top'}`, async ({ page }) => {
+    await boot(page); await collapse(page);
+    const origin = { x: right ? 1722 : 10, y: bottom ? 962 : 10 };
+    await page.evaluate(origin => {
+      Object.assign(__native, origin);
+      __native.workArea = { position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 } };
+    }, origin);
+    for (const trigger of ['.mini-add', '.mini-peek']) {
+      await page.locator(trigger).click();
+      await expect(page.locator('html')).toHaveAttribute('data-expand-x', right ? 'left' : 'right');
+      await expect(page.locator('html')).toHaveAttribute('data-expand-y', bottom ? 'up' : 'down');
+      await expect.poll(() => page.viewportSize().width).toBe(340);
+      const bar = await page.locator('.mini-bar').boundingBox();
+      const frame = await page.evaluate(() => ({ x: __native.x, y: __native.y }));
+      expect(frame.x + bar.x).toBe(origin.x + 12);
+      expect(frame.y + bar.y).toBe(origin.y + 12);
+      if (trigger === '.mini-peek') { await page.locator(trigger).click(); await mode(page, 'tasks'); }
+      await page.keyboard.press('Escape'); await mode(page, 'mini');
+      await expect.poll(() => page.viewportSize().width).toBe(188);
+      expect(await page.evaluate(() => ({ x: __native.x, y: __native.y }))).toEqual(origin);
+    }
+  });
+}
+
 async function collapse(page) { await page.locator('[data-act="collapse"]').click(); await mode(page, 'mini'); await expect.poll(() => page.viewportSize().width).toBe(188); }
 
 test('native bar dimensions, right anchor and full geometry round-trip retain day and draft', async ({ page }) => {

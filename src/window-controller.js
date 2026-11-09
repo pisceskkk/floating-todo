@@ -1,4 +1,4 @@
-import { PANEL_MIN, PANEL_DEFAULT, BAR_SIZE, CAPTURE_SIZE, isCompact, anchoredBounds, southwestResize } from './window-layout.js';
+import { PANEL_MIN, PANEL_DEFAULT, BAR_SIZE, CAPTURE_SIZE, STACK_SIZE, TASKS_SIZE, floatingBounds, isCompact, anchoredBounds, southwestResize } from './window-layout.js';
 
 export function createWindowController({ api, moveToScreen, onChange, onError }) {
   const native = api?.getCurrentWindow?.();
@@ -8,6 +8,7 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
   let resize = null;
   let resizeTask = Promise.resolve();
   let task = Promise.resolve();
+  let direction = { horizontal: 'left', vertical: 'down' };
 
   function observeSize() {
     if (mode !== 'panel' || transitioning || resize) return;
@@ -43,13 +44,30 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
       await resizeTask;
       observeSize();
       const previous = mode;
+      const previousDirection = direction;
       let before;
       transitioning = true;
       try {
         before = await frame();
         const monitor = native ? await api.currentMonitor() : null;
-        const size = next === 'panel' ? lastFullSize : next === 'mini' ? BAR_SIZE : CAPTURE_SIZE;
-        const bounds = anchoredBounds(before, size, monitor?.workArea || (monitor && { position: monitor.position, size: monitor.size }));
+        const area = monitor?.workArea || (monitor && { position: monitor.position, size: monitor.size });
+        const size = next === 'panel' ? lastFullSize : next === 'mini' ? BAR_SIZE : next === 'stack' ? STACK_SIZE : next === 'tasks' ? TASKS_SIZE : CAPTURE_SIZE;
+        let anchor = before;
+        if (previous !== 'panel' && previous !== 'mini') {
+          const width = Math.round(BAR_SIZE.width * before.scale);
+          const height = Math.round(BAR_SIZE.height * before.scale);
+          anchor = { ...before, width, height,
+            x: direction.horizontal === 'left' ? before.x + before.width - width : before.x,
+            y: direction.vertical === 'up' ? before.y + before.height - height : before.y };
+        }
+        let bounds;
+        if (next === 'panel' || previous === 'panel' && next === 'mini') {
+          bounds = anchoredBounds(anchor, size, area);
+        } else {
+          const result = floatingBounds(anchor, size, area, previous === 'stack' || previous === 'tasks' || previous === 'quick' ? direction : null);
+          bounds = result.bounds;
+          direction = result.direction;
+        }
         mode = next;
         onChange();
         if (native) {
@@ -61,6 +79,7 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
         return true;
       } catch (error) {
         mode = previous;
+        direction = previousDirection;
         if (native && before) {
           try {
             const min = previous === 'panel' ? PANEL_MIN : BAR_SIZE;
@@ -151,6 +170,7 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
 
   return {
     get mode() { return mode; },
+    get direction() { return direction; },
     get floating() { return mode !== 'panel'; },
     get transitioning() { return transitioning; },
     observeSize, setMode, attachResize,

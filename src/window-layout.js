@@ -4,6 +4,24 @@ export const PANEL_MAX = { width: 460, height: 760 };
 // Sizes include the 12px transparent shadow gutter on each edge.
 export const BAR_SIZE = { width: 188, height: 68 };
 export const CAPTURE_SIZE = { width: 340, height: 252 };
+export const STACK_SIZE = { width: 340, height: 164 };
+export const TASKS_SIZE = { width: 340, height: 300 };
+
+// Choose the roomier side of the bar, preserving its screen position.
+export function floatingBounds(bar, size, area, direction) {
+  const scale = bar.scale;
+  const width = Math.round(size.width * scale);
+  const height = Math.round(size.height * scale);
+  const horizontal = direction?.horizontal || (!area || bar.x - area.position.x >= area.position.x + area.size.width - bar.x - bar.width ? 'left' : 'right');
+  const vertical = direction?.vertical || (!area || area.position.y + area.size.height - bar.y - bar.height >= bar.y - area.position.y ? 'down' : 'up');
+  let x = horizontal === 'left' ? bar.x + bar.width - width : bar.x;
+  let y = vertical === 'up' ? bar.y + bar.height - height : bar.y;
+  if (area) {
+    x = Math.max(area.position.x, Math.min(x, area.position.x + area.size.width - width));
+    y = Math.max(area.position.y, Math.min(y, area.position.y + area.size.height - height));
+  }
+  return { bounds: { x: Math.round(x), y: Math.round(y), width, height, scale }, direction: { horizontal, vertical } };
+}
 
 export function isCompact({ width, height }) {
   return width < 300 || height < 280;

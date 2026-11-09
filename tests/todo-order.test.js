@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reorderItems, reorderVisibleItems } from "../src/todo-order.js";
+import { reorderItems, reorderVisibleItems, recentTasks } from "../src/todo-order.js";
+
+test('recent tasks follow day then manual priority, skip completed and cap at three', () => {
+  const source = { today: [{ id: 'done', completed: true }, { id: 'a' }], tomorrow: [{ id: 'b' }, { id: 'c' }, { id: 'd' }], dayAfterTomorrow: [{ id: 'e' }] };
+  assert.deepEqual(recentTasks(source).map(item => [item.id, item.day]), [['a', 'today'], ['b', 'tomorrow'], ['c', 'tomorrow']]);
+  assert.equal(source.today[1].day, undefined);
+  assert.deepEqual(recentTasks({ today: [], tomorrow: [], dayAfterTomorrow: [{ id: 'e' }] }), [{ id: 'e', day: 'dayAfterTomorrow' }]);
+  assert.deepEqual(recentTasks({}), []);
+});
 
 test("manual order is preserved without mutating todos or their metadata", () => {
   const items = [

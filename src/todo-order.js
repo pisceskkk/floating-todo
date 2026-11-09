@@ -17,3 +17,8 @@ export function reorderVisibleItems(items, orderedIds) {
   const merged = items.map(item => ids.has(item.id) ? orderedIds[index++] : item.id);
   return reorderItems(items, merged);
 }
+export function recentTasks(itemsByDay) {
+  return ['today', 'tomorrow', 'dayAfterTomorrow'].flatMap(day =>
+    (itemsByDay[day] || []).filter(item => !item.completed).map(item => ({ ...item, day }))
+  ).slice(0, 3);
+}
