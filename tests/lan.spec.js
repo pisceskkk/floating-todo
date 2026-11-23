@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { newDocument } from '../src/sync-model.js';
 async function boot(page) {
   await page.addInitScript(({ doc }) => {
-    let saved = JSON.stringify(doc), enabled = false, peers = [];
+    let saved = JSON.stringify(doc), enabled = false, peers = [], irohEnabled = true, relayUrl = '';
     window.__lanCalls = [];
     window.__TAURI_INTERNALS__ = {};
     window.__TAURI__ = { core: { invoke: async (name, args = {}) => {
@@ -10,9 +10,21 @@ async function boot(page) {
       if (name === 'storage_save') { saved = args.json; window.__saved = JSON.parse(saved); return args.expectedGeneration + 1; }
       if (name.startsWith('lan_')) window.__lanCalls.push({ ...args, name, deviceName: args.name });
       if (name === 'lan_device_name') return 'Office Mac mini';
-      if (name === 'lan_start') enabled = true;
+      if (name === 'lan_start') { enabled = true; irohEnabled = args.irohEnabled !== false; relayUrl = args.relayUrl || ''; }
       if (name === 'lan_stop') enabled = false;
-      if (name === 'lan_status' || name === 'lan_start') return { enabled, port: 47831, peers, candidates: enabled ? [{ id: 'peer', name: '<script>对方设备</script>', url: 'http://192.168.1.2:47831' }] : [] };
+      if (name === 'lan_status' || name === 'lan_start') return {
+        enabled,
+        port: 47831,
+        iroh: enabled && irohEnabled ? {
+          enabled: true,
+          endpointId: 'a'.repeat(64),
+          address: `iroh://${'a'.repeat(64)}?relay=${relayUrl || 'https://sg-relay.iroh.network'}`,
+          relayUrl,
+          homeRelay: relayUrl || 'https://sg-relay.iroh.network',
+        } : { enabled: false, endpointId: '', address: '', relayUrl: '', homeRelay: '' },
+        peers,
+        candidates: enabled ? [{ id: 'peer', name: '<script>对方设备</script>', url: 'http://192.168.1.2:47831' }] : []
+      };
       if (name === 'lan_codes' || name === 'lan_rotate') return { dynamic: '123456', fixed: '12345678', expires: Date.now() + 60000 };
       if (name === 'lan_pair') { if (args.code !== '123456' && args.code !== '12345678') throw new Error('短码或配对认证失败'); peers = [{ id: 'peer', name: '对方设备', url: args.url, lastSuccess: Date.now() }]; }
       if (name === 'lan_revoke') peers = [];
@@ -58,4 +70,23 @@ test('native change events coalesce into one immediate pull', async ({ page }) =
   await expect.poll(() => page.evaluate(() => window.__lanCalls.filter(c => c.name === 'lan_pull').length)).toBe(1);
   await page.evaluate(() => { for (let i = 0; i < 20; i++) window.__lanWake(); });
   await expect.poll(() => page.evaluate(() => window.__lanCalls.filter(c => c.name === 'lan_pull').length)).toBe(2);
+});
+
+test('Iroh cross-network sync supports default public relay and custom self-hosted relay', async ({ page }) => {
+  await boot(page);
+  await page.locator('[data-lan-enabled]').check();
+  await page.locator('[data-lan-save]').click();
+  await expect(page.locator('[data-lan-status]')).toContainText('Iroh 跨网（公共中继）');
+  await expect(page.locator('[data-lan-iroh-addr]')).toContainText('?relay=https://sg-relay.iroh.network');
+  await expect(page.locator('[data-lan-copy-iroh]')).toBeVisible();
+
+  await page.locator('[data-lan-relay]').fill('https://relay.example.com');
+  await page.locator('[data-lan-save]').click();
+  await expect(page.locator('[data-lan-status]')).toContainText('Iroh 跨网（自建中继）');
+  await expect(page.locator('[data-lan-iroh-addr]')).toContainText('?relay=https://relay.example.com');
+  expect(await page.evaluate(() => window.__saved.lan)).toMatchObject({
+    enabled: true,
+    irohEnabled: true,
+    relayUrl: 'https://relay.example.com',
+  });
 });

@@ -1,7 +1,7 @@
 {
   "name": "floating-todo",
   "private": true,
-  "version": "0.4.2-rc1",
+  "version": "0.4.2-rc2",
   "type": "module",
   "scripts": {
     "tauri": "tauri",

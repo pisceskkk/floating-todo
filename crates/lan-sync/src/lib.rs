@@ -1,5 +1,8 @@
-//! Native LAN transport. Only explicit short-code pairing grants read access.
+//! Native LAN and cross-network (Iroh) transport. Only explicit short-code pairing grants read access.
 //! Revisions are published after the application's durable single-writer commit.
+pub mod iroh_transport;
+pub mod transport;
+
 use aes_gcm::{
     aead::{Aead, Payload},
     Aes256Gcm, KeyInit, Nonce,
@@ -12,6 +15,8 @@ use axum::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+pub use iroh_transport::IrohRelayOption;
+use iroh_transport::{load_or_generate_secret, IrohTransport};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -25,12 +30,15 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::task::JoinHandle;
+pub use transport::{
+    endpoint, parse_endpoint, parse_relay_url, HttpTransport, PeerEndpoint, Transport,
+    TransportRouter, MAX_BODY,
+};
 use uuid::Uuid;
 
 pub const PORT: u16 = 47831;
 const SERVICE: &str = "_floatingtodo._tcp.local.";
 const PROTOCOL: &str = "floating-todo-lan/1";
-const MAX_BODY: usize = 512 * 1024;
 const MAX_RECORD: usize = 128 * 1024;
 type Result<T> = std::result::Result<T, String>;
 type Save = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
@@ -140,6 +148,8 @@ pub struct Vault {
     peers: BTreeMap<String, Peer>,
     #[serde(default)]
     attempts: Vec<u64>,
+    #[serde(default)]
+    iroh_secret: Option<String>,
 }
 impl Default for Vault {
     fn default() -> Self {
@@ -147,6 +157,7 @@ impl Default for Vault {
             fixed: code(8),
             peers: BTreeMap::new(),
             attempts: vec![],
+            iroh_secret: None,
         }
     }
 }
@@ -241,10 +252,39 @@ impl Data {
         Ok(())
     }
 }
+#[derive(Clone, Debug)]
+pub struct StartConfig {
+    pub port: u16,
+    pub discovery: bool,
+    pub iroh_enabled: bool,
+    pub relay_url: Option<String>,
+    #[cfg(test)]
+    pub iroh_local_only: bool,
+}
+
+impl Default for StartConfig {
+    fn default() -> Self {
+        Self {
+            port: PORT,
+            discovery: true,
+            iroh_enabled: true,
+            relay_url: None,
+            #[cfg(test)]
+            iroh_local_only: false,
+        }
+    }
+}
+
+enum RemoteOrigin {
+    Ip(IpAddr),
+    Iroh(iroh::EndpointId),
+}
+
 #[derive(Clone)]
 pub struct Node {
     data: Arc<Mutex<Data>>,
-    client: reqwest::Client,
+    transport: TransportRouter,
+    iroh: Option<Arc<IrohTransport>>,
     port: u16,
     permits: Arc<tokio::sync::Semaphore>,
     outbound_ready: Arc<tokio::sync::Notify>,
@@ -275,38 +315,10 @@ impl Drop for Runtime {
         if let Some(m) = &self.mdns {
             let _ = m.shutdown();
         }
-    }
-}
-fn endpoint(input: &str) -> Result<String> {
-    let u = reqwest::Url::parse(input).map_err(|_| "请输入 http://局域网IP:端口")?;
-    if u.scheme() != "http"
-        || !u.username().is_empty()
-        || u.password().is_some()
-        || u.path() != "/"
-        || u.query().is_some()
-        || u.fragment().is_some()
-    {
-        return Err("仅支持局域网 HTTP 地址".into());
-    }
-    let ip: IpAddr = u
-        .host_str()
-        .ok_or("缺少 IP")?
-        .trim_matches(['[', ']'])
-        .parse()
-        .map_err(|_| "请使用 IP 地址")?;
-    let allowed = match ip {
-        IpAddr::V4(x) => {
-            x.is_private()
-                || x.is_link_local()
-                || (x.octets()[0] == 100 && (64..=127).contains(&x.octets()[1]))
-                || cfg!(test) && x.is_loopback()
+        if let Some(iroh) = &self.node.iroh {
+            iroh.close_in_background();
         }
-        IpAddr::V6(_) => false,
-    };
-    if !allowed {
-        return Err("仅允许局域网或虚拟局域网地址".into());
     }
-    Ok(input.trim_end_matches('/').to_owned())
 }
 impl Node {
     pub async fn start(
@@ -317,13 +329,77 @@ impl Node {
         port: u16,
         discovery: bool,
     ) -> Result<Runtime> {
+        Self::start_with_config(
+            id,
+            name,
+            vault,
+            save,
+            StartConfig {
+                port,
+                discovery,
+                iroh_enabled: false,
+                relay_url: None,
+                #[cfg(test)]
+                iroh_local_only: false,
+            },
+        )
+        .await
+    }
+
+    pub async fn start_with_config(
+        id: String,
+        name: String,
+        mut vault: Vault,
+        save: Save,
+        config: StartConfig,
+    ) -> Result<Runtime> {
         if !valid_id(&id) {
             return Err("无效设备标识".into());
         }
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port))
             .await
             .map_err(|e| format!("监听失败：{e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let http_transport: Arc<dyn Transport> = Arc::new(HttpTransport::new()?);
+        let mut transports: Vec<Arc<dyn Transport>> = vec![http_transport];
+        let iroh = if config.iroh_enabled {
+            let had_secret = vault
+                .iroh_secret
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let (secret_key, encoded) = load_or_generate_secret(vault.iroh_secret.as_deref())?;
+            if !had_secret {
+                vault.iroh_secret = Some(encoded);
+                (save)(&serde_json::to_string(&vault).map_err(|e| e.to_string())?)?;
+            }
+            let relay_opt = if let Some(raw) = config
+                .relay_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                IrohRelayOption::Custom(parse_relay_url(raw)?)
+            } else {
+                #[cfg(test)]
+                {
+                    if config.iroh_local_only {
+                        IrohRelayOption::LocalOnly
+                    } else {
+                        IrohRelayOption::DefaultPublic
+                    }
+                }
+                #[cfg(not(test))]
+                {
+                    IrohRelayOption::DefaultPublic
+                }
+            };
+            let transport = IrohTransport::bind(secret_key, relay_opt).await?;
+            transports.push(transport.clone());
+            Some(transport)
+        } else {
+            None
+        };
         let node = Self {
             data: Arc::new(Mutex::new(Data {
                 id: id.clone(),
@@ -347,12 +423,8 @@ impl Node {
                 hints: BTreeMap::new(),
                 sources: BTreeMap::new(),
             })),
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(4))
-                .build()
-                .map_err(|e| e.to_string())?,
+            transport: TransportRouter::new(transports),
+            iroh: iroh.clone(),
             port,
             permits: Arc::new(tokio::sync::Semaphore::new(8)),
             outbound_ready: Arc::new(tokio::sync::Notify::new()),
@@ -382,6 +454,16 @@ impl Node {
             tasks: vec![task],
             mdns: None,
         };
+        if let Some(iroh_transport) = iroh {
+            let handler_node = node.clone();
+            let iroh_task = iroh_transport.spawn_server(
+                node.permits.clone(),
+                Arc::new(move |remote_id, path, body| {
+                    handler_node.handle_rpc(RemoteOrigin::Iroh(remote_id), &path, body)
+                }),
+            );
+            runtime.tasks.push(iroh_task);
+        }
         let notifications = node.clone();
         runtime.tasks.push(tokio::spawn(async move {
             loop {
@@ -390,7 +472,7 @@ impl Node {
                 notifications.send_notifications().await;
             }
         }));
-        if discovery {
+        if config.discovery {
             let m = ServiceDaemon::new().map_err(|e| e.to_string())?;
             runtime.mdns = Some(m.clone());
             m.disable_interface(mdns_sd::IfKind::IPv6)
@@ -512,7 +594,41 @@ impl Node {
         let mut d = self.data.lock().unwrap();
         d.candidates
             .retain(|_, c| now().saturating_sub(c.seen) < 120000);
-        json!({"enabled":d.enabled,"id":d.id,"name":d.name,"port":self.port,"candidates":d.candidates.values().collect::<Vec<_>>(),"peers":d.vault.peers.values().map(|p|{let h=d.health.get(&p.id);json!({"id":p.id,"name":p.name,"url":p.url,"error":h.map(|x|x.error.clone()).unwrap_or_default(),"lastSuccess":h.map(|x|x.last_success).unwrap_or(0)})}).collect::<Vec<_>>()})
+        let iroh_status = if let Some(iroh) = &self.iroh {
+            json!({
+                "enabled": true,
+                "endpointId": iroh.endpoint_id().to_string(),
+                "address": iroh.share_address(),
+                "relayUrl": iroh.custom_relay_url().map(|u| u.as_str().trim_end_matches('/').to_owned()).unwrap_or_default(),
+                "homeRelay": iroh.home_relay().unwrap_or_default(),
+            })
+        } else {
+            json!({
+                "enabled": false,
+                "endpointId": "",
+                "address": "",
+                "relayUrl": "",
+                "homeRelay": "",
+            })
+        };
+        json!({
+            "enabled": d.enabled,
+            "id": d.id,
+            "name": d.name,
+            "port": self.port,
+            "iroh": iroh_status,
+            "candidates": d.candidates.values().collect::<Vec<_>>(),
+            "peers": d.vault.peers.values().map(|p| {
+                let h = d.health.get(&p.id);
+                json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "url": p.url,
+                    "error": h.map(|x| x.error.clone()).unwrap_or_default(),
+                    "lastSuccess": h.map(|x| x.last_success).unwrap_or(0)
+                })
+            }).collect::<Vec<_>>()
+        })
     }
     pub fn codes(&self) -> Value {
         self.data.lock().unwrap().codes()
@@ -548,24 +664,7 @@ impl Node {
         Ok(())
     }
     async fn request(&self, url: &str, path: &str, body: Option<Value>) -> Result<Value> {
-        let url = endpoint(url)?;
-        let request = if let Some(v) = body {
-            self.client.post(format!("{url}{path}")).json(&v)
-        } else {
-            self.client.get(format!("{url}{path}"))
-        };
-        let mut r = request.send().await.map_err(|e| format!("{e:?}"))?;
-        if !r.status().is_success() {
-            return Err(format!("设备请求失败 ({})", r.status()));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = r.chunk().await.map_err(|e| e.to_string())? {
-            if bytes.len() + chunk.len() > MAX_BODY {
-                return Err("设备响应过大".into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        self.transport.request(url, path, body).await
     }
     pub async fn discover(&self, url: &str, source: &str) -> Result<()> {
         if !self.data.lock().unwrap().enabled {
@@ -745,12 +844,20 @@ impl Node {
             &Identity::new(b.as_bytes()),
         );
         let am = hex::encode(msg);
+        let mut start_payload = json!({"id":a,"name":name,"mode":mode,"message":am,"port":self.port});
+        if url.starts_with("iroh://") {
+            if let Some(iroh) = &self.iroh {
+                if let Some(relay) = iroh.active_relay_url() {
+                    start_payload["relay"] = json!(relay);
+                }
+                #[cfg(test)]
+                if let Some(sock) = iroh.local_direct_addr() {
+                    start_payload["direct"] = json!(sock.to_string());
+                }
+            }
+        }
         let response = self
-            .request(
-                &url,
-                "/pair/start",
-                Some(json!({"id":a,"name":name,"mode":mode,"message":am,"port":self.port})),
-            )
+            .request(&url, "/pair/start", Some(start_payload))
             .await?;
         let bm = field(&response, "message")?;
         let session = field(&response, "session")?;
@@ -950,22 +1057,30 @@ impl Node {
         }
         Ok(records.clone())
     }
-}
-async fn hello(State(n): State<Node>) -> Json<Value> {
-    let d = n.data.lock().unwrap();
-    Json(json!({"protocol":PROTOCOL,"id":d.id,"name":d.name}))
-}
-type Response = std::result::Result<Json<Value>, (StatusCode, String)>;
-fn response(v: Result<Value>) -> Response {
-    v.map(Json).map_err(|e| (StatusCode::BAD_REQUEST, e))
-}
-async fn pair_start(
-    State(n): State<Node>,
-    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    Json(v): Json<Value>,
-) -> Response {
-    response((|| {
-        let mut d = n.data.lock().unwrap();
+    fn handle_rpc(&self, origin: RemoteOrigin, path: &str, body: Option<Value>) -> Result<Value> {
+        match path {
+            "/hello" => {
+                let d = self.data.lock().unwrap();
+                Ok(json!({"protocol":PROTOCOL,"id":d.id,"name":d.name}))
+            }
+            "/pair/start" => {
+                let v = body.ok_or("缺少请求体")?;
+                self.handle_pair_start(origin, v)
+            }
+            "/pair/finish" => {
+                let v = body.ok_or("缺少请求体")?;
+                self.handle_pair_finish(v)
+            }
+            "/read" => {
+                let v = body.ok_or("缺少请求体")?;
+                self.handle_read(v)
+            }
+            _ => Err("不支持的请求路径".into()),
+        }
+    }
+
+    fn handle_pair_start(&self, origin: RemoteOrigin, v: Value) -> Result<Value> {
+        let mut d = self.data.lock().unwrap();
         if !d.enabled {
             return Err("同步已关闭".into());
         }
@@ -992,11 +1107,42 @@ async fn pair_start(
         let bm = hex::encode(msg);
         let session = random_hex(16);
         let ctx = context(id, &d.id, mode, &session, am, &bm);
-        let port = v["port"]
-            .as_u64()
-            .filter(|p| *p > 0 && *p <= 65535)
-            .ok_or("无效端口")?;
-        let url = endpoint(&format!("http://{}:{port}", addr.ip()))?;
+        let url = match origin {
+            RemoteOrigin::Ip(ip) => {
+                let port = v["port"]
+                    .as_u64()
+                    .filter(|p| *p > 0 && *p <= 65535)
+                    .ok_or("无效端口")?;
+                endpoint(&format!("http://{ip}:{port}"))?
+            }
+            RemoteOrigin::Iroh(remote_id) => {
+                let mut raw = format!("iroh://{remote_id}");
+                let mut sep = '?';
+                if let Some(relay_str) = v["relay"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    let parsed = parse_relay_url(relay_str)?;
+                    raw.push(sep);
+                    raw.push_str("relay=");
+                    raw.push_str(parsed.as_str().trim_end_matches('/'));
+                    sep = '&';
+                }
+                #[cfg(test)]
+                if let Some(direct_str) = v["direct"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    raw.push(sep);
+                    raw.push_str("addr=");
+                    raw.push_str(direct_str);
+                }
+                let _ = sep;
+                endpoint(&raw)?
+            }
+        };
         d.pending.retain(|_, p| p.expires > now());
         if d.pending.len() >= 16 {
             return Err("配对繁忙".into());
@@ -1017,11 +1163,10 @@ async fn pair_start(
             },
         );
         Ok(answer)
-    })())
-}
-async fn pair_finish(State(n): State<Node>, Json(v): Json<Value>) -> Response {
-    response((|| {
-        let mut d = n.data.lock().unwrap();
+    }
+
+    fn handle_pair_finish(&self, v: Value) -> Result<Value> {
+        let mut d = self.data.lock().unwrap();
         if !d.enabled {
             return Err("同步已关闭".into());
         }
@@ -1044,13 +1189,12 @@ async fn pair_finish(State(n): State<Node>, Json(v): Json<Value>) -> Response {
             url: p.url,
             key: hex::encode(&p.key),
         })?;
-        n.changed.notify_one();
+        self.changed.notify_one();
         Ok(json!({"proof":proof(&p.key,&format!("complete:{}",p.context))}))
-    })())
-}
-async fn read(State(n): State<Node>, Json(v): Json<Value>) -> Response {
-    response((|| {
-        let mut d = n.data.lock().unwrap();
+    }
+
+    fn handle_read(&self, v: Value) -> Result<Value> {
+        let mut d = self.data.lock().unwrap();
         if !d.enabled {
             return Err("同步已关闭".into());
         }
@@ -1071,7 +1215,7 @@ async fn read(State(n): State<Node>, Json(v): Json<Value>) -> Response {
                 if root != d.root && d.hints.get(from).map(String::as_str) != Some(root) {
                     d.hints.insert(from.into(), root.into());
                     d.dirty.insert(from.into());
-                    n.changed.notify_one();
+                    self.changed.notify_one();
                 }
                 json!({"ok":true})
             }
@@ -1105,7 +1249,30 @@ async fn read(State(n): State<Node>, Json(v): Json<Value>) -> Response {
             _ => return Err("无效操作".into()),
         };
         seal(&key, &d.id, from, "response", req, &result)
-    })())
+    }
+}
+async fn hello(State(n): State<Node>) -> Json<Value> {
+    Json(
+        n.handle_rpc(RemoteOrigin::Ip(Ipv4Addr::LOCALHOST.into()), "/hello", None)
+            .unwrap_or_else(|_| json!({})),
+    )
+}
+type Response = std::result::Result<Json<Value>, (StatusCode, String)>;
+fn response(v: Result<Value>) -> Response {
+    v.map(Json).map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+async fn pair_start(
+    State(n): State<Node>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Json(v): Json<Value>,
+) -> Response {
+    response(n.handle_rpc(RemoteOrigin::Ip(addr.ip()), "/pair/start", Some(v)))
+}
+async fn pair_finish(State(n): State<Node>, Json(v): Json<Value>) -> Response {
+    response(n.handle_rpc(RemoteOrigin::Ip(Ipv4Addr::LOCALHOST.into()), "/pair/finish", Some(v)))
+}
+async fn read(State(n): State<Node>, Json(v): Json<Value>) -> Response {
+    response(n.handle_rpc(RemoteOrigin::Ip(Ipv4Addr::LOCALHOST.into()), "/read", Some(v)))
 }
 
 async fn limit_request(
@@ -1459,6 +1626,162 @@ mod tests {
             .as_str()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn iroh_endpoints_and_relay_urls_validate_strictly() {
+        let key = iroh::SecretKey::generate();
+        let id = key.public();
+        let plain = format!("iroh://{id}");
+        assert_eq!(endpoint(&plain).unwrap(), plain);
+        let with_relay = format!("iroh://{id}?relay=https://relay.example.com");
+        assert_eq!(endpoint(&with_relay).unwrap(), with_relay);
+        assert!(parse_relay_url("https://relay.example.com").is_ok());
+
+        for bad in [
+            "iroh://",
+            "iroh://not-a-valid-node-id",
+            &format!("iroh://user@{id}"),
+            &format!("iroh://{id}?relay=http://public.example.com"),
+            &format!("iroh://{id}?relay=https://user:pass@relay.example.com"),
+            &format!("iroh://{id}?unknown=1"),
+            &format!("iroh://{id}#frag"),
+        ] {
+            assert!(endpoint(bad).is_err(), "should reject {bad}");
+        }
+        assert!(parse_relay_url("http://public.example.com").is_err());
+        assert!(parse_relay_url("https://user:pass@relay.example.com").is_err());
+    }
+
+    #[tokio::test]
+    async fn iroh_quic_pairing_sync_notifications_revoke_and_persistent_key() {
+        let saved_b = Arc::new(Mutex::new(String::new()));
+        let copy_b = saved_b.clone();
+        let b_id = Uuid::new_v4().to_string();
+        let a = Node::start_with_config(
+            Uuid::new_v4().to_string(),
+            "iroh-a".into(),
+            Vault::default(),
+            Arc::new(|_| Ok(())),
+            StartConfig {
+                port: 0,
+                discovery: false,
+                iroh_enabled: true,
+                relay_url: None,
+                iroh_local_only: true,
+            },
+        )
+        .await
+        .unwrap();
+        let b = Node::start_with_config(
+            b_id.clone(),
+            "iroh-b".into(),
+            Vault::default(),
+            Arc::new(move |v| {
+                *copy_b.lock().unwrap() = v.into();
+                Ok(())
+            }),
+            StartConfig {
+                port: 0,
+                discovery: false,
+                iroh_enabled: true,
+                relay_url: None,
+                iroh_local_only: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let b_status = b.node.status();
+        assert_eq!(b_status["iroh"]["enabled"], true);
+        let b_endpoint_id = b_status["iroh"]["endpointId"].as_str().unwrap().to_owned();
+        assert!(b_status["iroh"]["address"]
+            .as_str()
+            .unwrap()
+            .starts_with("iroh://"));
+
+        // Discover & pair over real Iroh QUIC stream.
+        let b_addr = b.node.iroh.as_ref().unwrap().test_direct_address();
+        a.node.discover(&b_addr, "manual").await.unwrap();
+        let code = b.node.codes()["dynamic"].as_str().unwrap().to_owned();
+        a.node.pair(&b_addr, "dynamic", &code).await.unwrap();
+
+        // A publishes -> B receives change notification over Iroh -> B pulls from A.
+        b.node.data.lock().unwrap().dirty.clear();
+        a.node.publish(vec![record(1), record(2)]).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if !b.node.data.lock().unwrap().dirty.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("iroh change notification");
+        let pulled_on_b = b.node.pull().await.unwrap();
+        assert_eq!(pulled_on_b.len(), 2);
+        b.node.publish(pulled_on_b).unwrap();
+        assert_eq!(
+            a.node.data.lock().unwrap().root,
+            b.node.data.lock().unwrap().root
+        );
+
+        // Bidirectional check: B publishes new record -> A pulls from B over Iroh.
+        let mut b_recs: Vec<Value> = b
+            .node
+            .data
+            .lock()
+            .unwrap()
+            .revisions
+            .values()
+            .cloned()
+            .collect();
+        b_recs.push(record(3));
+        b.node.publish(b_recs).unwrap();
+        a.node.request_poll();
+        let pulled_on_a = a.node.pull().await.unwrap();
+        assert_eq!(pulled_on_a.len(), 1);
+
+        // Revoke A on B -> A's RPC over Iroh is rejected.
+        let a_id = a.node.status()["id"].as_str().unwrap().to_owned();
+        b.node.revoke(&a_id).unwrap();
+        let peer_b = a
+            .node
+            .data
+            .lock()
+            .unwrap()
+            .vault
+            .peers
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert!(a.node.rpc(&peer_b, json!({"op":"status"})).await.is_err());
+
+        // Restart B with persisted Vault -> endpointId must remain identical.
+        let persisted_vault: Vault = serde_json::from_str(&saved_b.lock().unwrap()).unwrap();
+        assert!(persisted_vault.iroh_secret.is_some());
+        drop(b);
+        let b_restarted = Node::start_with_config(
+            b_id,
+            "iroh-b".into(),
+            persisted_vault,
+            Arc::new(|_| Ok(())),
+            StartConfig {
+                port: 0,
+                discovery: false,
+                iroh_enabled: true,
+                relay_url: None,
+                iroh_local_only: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            b_restarted.node.status()["iroh"]["endpointId"],
+            b_endpoint_id
+        );
     }
 }
 

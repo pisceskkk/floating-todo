@@ -60,16 +60,26 @@ export class SyncStore {
       .then(name => String(name || '').trim() || 'floating todo').catch(() => 'floating todo');
     return this.deviceNamePromise;
   }
-  async configureLan(enabled, name = this.doc.lan?.name) {
+  async configureLan(
+    enabled,
+    name = this.doc.lan?.name,
+    irohEnabled = this.doc.lan?.irohEnabled ?? true,
+    relayUrl = this.doc.lan?.relayUrl ?? '',
+  ) {
     if (!this.native) throw new Error('局域网同步仅在客户端应用中可用');
     if (this.lanBusy) throw new Error('正在同步，请稍后修改连接');
     name = name?.trim();
     if (!name || name === '我的待办') name = await this.lanDeviceName();
+    const cleanRelay = String(relayUrl || '').trim();
     if (enabled) {
       await this.persist();
-      await this.invoke('lan_start', { name });
+      await this.invoke('lan_start', {
+        name,
+        irohEnabled: !!irohEnabled,
+        relayUrl: cleanRelay || null,
+      });
     } else await this.invoke('lan_stop');
-    this.doc.lan = { enabled, name };
+    this.doc.lan = { enabled, name, irohEnabled: !!irohEnabled, relayUrl: cleanRelay };
     await this.persist(); this.lanError = ''; this.scheduleLan();
   }
   scheduleLan() {

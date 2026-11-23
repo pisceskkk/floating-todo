@@ -1,4 +1,4 @@
-use floating_todo_lan::{Node, Runtime, Vault, PORT};
+use floating_todo_lan::{Node, Runtime, StartConfig, Vault, PORT};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -71,10 +71,27 @@ pub async fn lan_start(
     app: AppHandle,
     state: State<'_, LanState>,
     name: String,
+    iroh_enabled: Option<bool>,
+    relay_url: Option<String>,
 ) -> Result<Value, String> {
+    let iroh_enabled = iroh_enabled.unwrap_or(true);
+    let normalized_relay = relay_url
+        .map(|s| s.trim().trim_end_matches('/').to_owned())
+        .filter(|s| !s.is_empty());
     let mut guard = state.runtime.lock().await;
     if let Some(r) = guard.as_ref() {
-        return Ok(r.node.status());
+        let current = r.node.status();
+        let same_name = current["name"].as_str() == Some(name.as_str());
+        let same_iroh = current["iroh"]["enabled"].as_bool() == Some(iroh_enabled);
+        let current_relay = current["iroh"]["relayUrl"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if same_name && same_iroh && current_relay == normalized_relay {
+            return Ok(current);
+        }
+        *state.node.lock().map_err(|e| e.to_string())? = None;
+        *guard = None;
     }
     let raw = crate::sync_storage::storage_load(app.clone())?.ok_or("请先保存本地数据")?;
     let doc: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
@@ -118,7 +135,19 @@ pub async fn lan_start(
         Ok(())
     });
     save(&serde_json::to_string(&vault).map_err(|e| e.to_string())?)?;
-    let mut runtime = Node::start(id, name, vault, save, PORT, true).await?;
+    let mut runtime = Node::start_with_config(
+        id,
+        name,
+        vault,
+        save,
+        StartConfig {
+            port: PORT,
+            discovery: true,
+            iroh_enabled,
+            relay_url: normalized_relay,
+        },
+    )
+    .await?;
     let events = app.clone();
     runtime.on_change(Arc::new(move || {
         let _ = events.emit("lan-changed", ());
@@ -140,9 +169,14 @@ pub async fn lan_stop(state: State<'_, LanState>) -> Result<(), String> {
 }
 #[tauri::command]
 pub fn lan_status(state: State<'_, LanState>) -> Result<Value, String> {
-    Ok(node(&state)
-        .map(|n| n.status())
-        .unwrap_or_else(|_| serde_json::json!({"enabled":false,"peers":[],"candidates":[]})))
+    Ok(node(&state).map(|n| n.status()).unwrap_or_else(|_| {
+        serde_json::json!({
+            "enabled": false,
+            "peers": [],
+            "candidates": [],
+            "iroh": {"enabled": false, "endpointId": "", "address": "", "relayUrl": "", "homeRelay": ""}
+        })
+    }))
 }
 #[tauri::command]
 pub fn lan_codes(state: State<'_, LanState>) -> Result<Value, String> {
