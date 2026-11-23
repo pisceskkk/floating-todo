@@ -45,11 +45,11 @@
   --selected-alpha: 0.94;
   --selected-shadow: 0 1.5px 4px rgba(15, 23, 42, 0.09), 0 0.5px 1px rgba(15, 23, 42, 0.05);
 
-  --shadow: rgba(15, 23, 42, 0.14);
-  --shadow-ambient: rgba(15, 23, 42, 0.06);
+  --shadow: rgba(15, 23, 42, 0.11);
+  --shadow-ambient: rgba(15, 23, 42, 0.05);
   --surface-shadow:
-    0 10px 26px -8px var(--shadow),
-    0 2px 6px -1px var(--shadow-ambient),
+    0 4px 10px -3px var(--shadow),
+    0 1px 3px -1px var(--shadow-ambient),
     0 0 0 0.5px var(--outer-ring),
     inset 0 1px 0 var(--inner-highlight),
     inset 0 0 0 0.5px var(--glass-rim);
@@ -117,8 +117,8 @@ html[data-theme="dark"] {
   --selected-alpha: 0.17;
   --selected-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.34), inset 0 0.5px 0 rgba(255, 255, 255, 0.16);
 
-  --shadow: rgba(0, 0, 0, 0.48);
-  --shadow-ambient: rgba(0, 0, 0, 0.28);
+  --shadow: rgba(0, 0, 0, 0.3);
+  --shadow-ambient: rgba(0, 0, 0, 0.16);
   --sheet-shadow:
     0 20px 44px -8px rgba(0, 0, 0, 0.56),
     0 4px 14px -2px rgba(0, 0, 0, 0.32),
@@ -167,8 +167,8 @@ html[data-theme="dark"] {
     --selected-alpha: 0.17;
     --selected-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.34), inset 0 0.5px 0 rgba(255, 255, 255, 0.16);
 
-    --shadow: rgba(0, 0, 0, 0.48);
-    --shadow-ambient: rgba(0, 0, 0, 0.28);
+    --shadow: rgba(0, 0, 0, 0.3);
+    --shadow-ambient: rgba(0, 0, 0, 0.16);
     --sheet-shadow:
       0 20px 44px -8px rgba(0, 0, 0, 0.56),
       0 4px 14px -2px rgba(0, 0, 0, 0.32),
@@ -211,9 +211,8 @@ html[data-surface="flat"] {
   --selected-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 0 0 0.5px rgba(15, 23, 42, 0.05);
 
   --surface-shadow:
-    0 8px 22px -6px rgba(15, 23, 42, 0.14),
-    0 2px 6px -2px rgba(15, 23, 42, 0.07),
-    0 0 0 0.5px rgba(15, 23, 42, 0.05);
+    0 4px 10px -3px rgba(15, 23, 42, 0.11),
+    0 1px 3px -1px rgba(15, 23, 42, 0.06);
   --sheet-shadow:
     0 16px 36px -8px rgba(15, 23, 42, 0.18),
     0 4px 12px -2px rgba(15, 23, 42, 0.08),
@@ -251,9 +250,8 @@ html[data-surface="flat"][data-theme="dark"] {
   --selected-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
 
   --surface-shadow:
-    0 10px 24px -6px rgba(0, 0, 0, 0.5),
-    0 3px 8px -2px rgba(0, 0, 0, 0.3),
-    0 0 0 0.5px rgba(0, 0, 0, 0.45);
+    0 4px 10px -3px rgba(0, 0, 0, 0.32),
+    0 1px 3px -1px rgba(0, 0, 0, 0.18);
   --sheet-shadow:
     0 18px 40px -8px rgba(0, 0, 0, 0.6),
     0 4px 12px -2px rgba(0, 0, 0, 0.34);
@@ -291,9 +289,8 @@ html[data-surface="flat"][data-theme="dark"] {
     --selected-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
 
     --surface-shadow:
-      0 10px 24px -6px rgba(0, 0, 0, 0.5),
-      0 3px 8px -2px rgba(0, 0, 0, 0.3),
-      0 0 0 0.5px rgba(0, 0, 0, 0.45);
+      0 4px 10px -3px rgba(0, 0, 0, 0.32),
+      0 1px 3px -1px rgba(0, 0, 0, 0.18);
     --sheet-shadow:
       0 18px 40px -8px rgba(0, 0, 0, 0.6),
       0 4px 12px -2px rgba(0, 0, 0, 0.34);
