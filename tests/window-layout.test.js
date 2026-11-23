@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { anchoredBounds, floatingBounds, southwestResize, BAR_SIZE, PANEL_DEFAULT, CAPTURE_SIZE } from '../src/window-layout.js';
+import { anchoredBounds, floatingBounds, BAR_SIZE, PANEL_DEFAULT, CAPTURE_SIZE } from '../src/window-layout.js';
 
 for (const scale of [1, 1.25, 1.5, 2]) {
   for (const horizontal of ['left', 'right']) for (const vertical of ['up', 'down']) {
@@ -15,29 +15,6 @@ for (const scale of [1, 1.25, 1.5, 2]) {
       assert.ok(bounds.x + bounds.width <= 0 && bounds.y + bounds.height <= 980 * scale);
     });
   }
-}
-
-for (const scale of [1, 1.25, 1.5, 2]) {
-  test(`southwest gesture requires both midlines at ${scale * 100}% scale`, () => {
-    const frame = { x: -600, y: 80, width: 340 * scale, height: 560 * scale, scale };
-    const start = { x: frame.x, y: frame.y + frame.height };
-    const center = { x: frame.x + frame.width - 110 * scale, y: frame.y + 90 * scale };
-    const bottom = frame.y + 180 * scale;
-    const left = frame.x + frame.width - 220 * scale;
-    for (const pointer of [
-      { x: left, y: bottom },
-      { x: center.x + 1, y: bottom },
-      { x: left, y: center.y - 1 },
-      { x: center.x, y: center.y },
-      { x: center.x + 1, y: center.y },
-      { x: center.x, y: center.y - 1 },
-    ]) assert.equal(southwestResize(frame, start, pointer).collapse, false);
-    const result = southwestResize(frame, start, { x: center.x + 1, y: center.y - 1 });
-    assert.equal(result.collapse, true);
-    assert.deepEqual(result.bounds, { ...frame, x: left, width: 220 * scale, height: 180 * scale });
-    // Moving back out of the minimum dimensions disarms the gesture.
-    assert.equal(southwestResize(frame, start, { x: start.x, y: bottom }).collapse, false);
-  });
 }
 
 test('collapse and expand preserve the right edge at noninteger DPI and negative monitor coordinates', () => {

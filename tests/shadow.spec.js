@@ -1,23 +1,36 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-const KEY = 'floating-todo/snapshot';
+import { newDocument, commitView, dateInZone } from '../src/sync-model.js';
+
+const CACHE_KEY = 'floating-todo/v3-preview';
+function buildDoc(extraSettings = {}) {
+  const doc = newDocument();
+  const base = {
+    schemaVersion: 3, selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 },
+    itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [],
+    settings: { appearance: 'light', opacity: 0.78 }, memo: { text: '', expanded: false }, lastActiveDate: dateInZone(),
+  };
+  const view = {
+    ...base,
+    itemsByDay: { today: [{ id: 'a', title: '检查圆角与分类', detail: '', time: null, completed: false, createdAt: 1, projectId: 'p', tagIds: ['t'] }], tomorrow: [], dayAfterTomorrow: [] },
+    projects: [{ id: 'p', name: '桌面工具', color: '#397fe5' }],
+    tags: [{ id: 't', name: '重要', color: '#ae65d6' }],
+    settings: { ...base.settings, ...extraSettings },
+  };
+  commitView(doc, base, view);
+  return doc;
+}
+
 async function boot(page, extraSettings = {}) {
-  await page.addInitScript(({ key, extraSettings }) => {
-    const d = new Date();
-    const old = {
-      itemsByDay: { today: [{ id: 'a', title: '检查圆角与分类', detail: '', time: null, completed: false, projectId: 'p', tagIds: ['t'] }], tomorrow: [], dayAfterTomorrow: [] },
-      recurringItems: [], selectedDay: 'today', lastActiveDate: `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`,
-      projects: [{ id: 'p', name: '桌面工具', color: '#397fe5' }], tags: [{ id: 't', name: '重要', color: '#ae65d6' }],
-      settings: { appearance: 'light', opacity: .78, ...extraSettings },
-    };
-    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(old));
-    window.__legacyBackup = old;
+  const rawDoc = JSON.stringify(buildDoc(extraSettings));
+  await page.addInitScript(({ key, rawDoc }) => {
+    if (!localStorage.getItem(key)) localStorage.setItem(key, rawDoc);
     window.__TAURI__ = { core: { invoke: async (cmd, args) => {
       if (cmd === 'export_data') window.__backup = args.json;
       if (cmd === 'import_data') return window.__import;
     } } };
-  }, { key: KEY, extraSettings });
+  }, { key: CACHE_KEY, rawDoc });
   await page.goto('/'); await expect(page.locator('.row')).toBeVisible();
 }
 async function settings(page) { await page.locator('[data-act="settings"]').click(); }
@@ -57,10 +70,6 @@ test('surface style defaults to glass on non-Windows, shadow toggle appears only
   await page.getByRole('switch', { name: '窗口阴影' }).click();
   await page.evaluate(() => { window.__import = window.__backup; }); await page.locator('[data-s="import"]').click();
   await page.locator('[data-import-confirm]').click();
-  await expect(page.locator('html')).toHaveAttribute('data-shadow', 'on');
-
-  await settings(page); await page.evaluate(() => { window.__import = JSON.stringify(window.__legacyBackup); });
-  await page.locator('[data-s="import"]').click(); await page.locator('[data-import-confirm]').click();
   await expect(page.locator('html')).toHaveAttribute('data-shadow', 'on');
 });
 

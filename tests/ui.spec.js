@@ -1,19 +1,50 @@
 import { test, expect } from '@playwright/test';
-const KEY = 'floating-todo/snapshot';
-const date = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`; };
-const snapshot = (extra = {}) => ({ selectedDay: 'today', itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { appearance: 'light', opacity: .5, memoEnabled: true }, memo: { text: '记录临时想法、链接、会议号', expanded: true }, lastActiveDate: date(), ...extra });
-const item = (id, title, extra = {}) => ({ id, title, detail: '', time: null, completed: false, notified: false, createdAt: 1, ...extra });
-const read = (page) => page.evaluate(key => JSON.parse(localStorage.getItem(key)), KEY);
+import { newDocument, commitView, projectView, exportDocument, dateInZone, isoDate, shiftDate } from '../src/sync-model.js';
+
+const CACHE_KEY = 'floating-todo/v3-preview';
+const date = () => dateInZone();
+const snapshot = (extra = {}) => ({ selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 }, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { appearance: 'light', opacity: .5, memoEnabled: true }, memo: { text: '记录临时想法、链接、会议号', expanded: true }, lastActiveDate: date(), ...extra });
+const item = (id, title, extra = {}) => ({ id, title, detail: '', time: null, completed: false, notified: false, createdAt: 1, projectId: null, tagIds: [], ...extra });
+
+function buildDoc(seed) {
+  const doc = newDocument();
+  const base = snapshot({ memo: { text: '', expanded: false } });
+  const activeDate = isoDate(seed.lastActiveDate || base.lastActiveDate);
+  const view = {
+    ...base,
+    ...seed,
+    lastActiveDate: activeDate,
+    recurringItems: (seed.recurringItems || []).map(t => ({
+      ...t,
+      ...(t.lastDone && t.streak > 0 ? { legacyStreak: { date: isoDate(t.lastDone), count: t.streak } } : {}),
+    })),
+  };
+  commitView(doc, { ...base, lastActiveDate: activeDate }, view);
+  for (const list of [view.itemsByDay.today, view.itemsByDay.tomorrow, view.itemsByDay.dayAfterTomorrow, view.recurringItems]) {
+    list.forEach((t, i) => {
+      const r = doc.revisions.find(rev => rev.entityType === 'order' && rev.entityId === t.id);
+      if (r) r.payload.position = i;
+    });
+  }
+  return doc;
+}
+
+async function read(page) {
+  const raw = await page.evaluate(key => localStorage.getItem(key), CACHE_KEY);
+  return projectView(JSON.parse(raw), snapshot());
+}
+
 async function boot(page, seed) {
-  await page.addInitScript(({ key, seed }) => {
-    if (seed && !localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(seed));
+  const rawDoc = seed ? JSON.stringify(buildDoc(seed)) : null;
+  await page.addInitScript(({ key, rawDoc }) => {
+    if (rawDoc && !localStorage.getItem(key)) localStorage.setItem(key, rawDoc);
     window.__notifications = [];
     window.__exported = null;
     window.__TAURI__ = {
       core: { invoke: async (name, args) => { if (name === 'export_data') window.__exported = args.json; if (name === 'import_data') return window.__imported; } },
       notification: { isPermissionGranted: async () => true, sendNotification: n => window.__notifications.push(n) },
     };
-  }, { key: KEY, seed });
+  }, { key: CACHE_KEY, rawDoc });
   await page.goto('/'); await expect(page.locator('#main-input')).toBeVisible();
 }
 async function add(page, value) { await page.locator('#main-input').fill(value); await page.locator('[data-act="submit"]').click(); }
@@ -121,11 +152,10 @@ for (const mode of ['keep', 'tasks', 'cancel']) test(`project deletion ${mode} c
 });
 
 test('rollover, move, pin/unpin, habit streak and reminder retain metadata', async ({ page }) => {
-  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-  const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth()+1}-${yesterday.getDate()}`;
+  const yesterdayStr = shiftDate(date(), -1);
   const linked = { projectId: 'p', tagIds: ['t'], time: '00:00' };
   await boot(page, snapshot({ lastActiveDate: yesterdayStr, projects: [{ id: 'p', name: '工作', color: '#397fe5' }], tags: [{ id: 't', name: '重要', color: '#ae65d6' }], itemsByDay: { today: [item('a', '顺延', linked)], tomorrow: [item('b', '计划', linked)], dayAfterTomorrow: [] }, recurringItems: [item('d', '打卡', { ...linked, streak: 3, lastDone: yesterdayStr, completed: true })] }));
-  const s = await read(page); expect(s.itemsByDay.today.map(t => t.id)).toEqual(['b','a']); expect(s.recurringItems[0].completed).toBe(false);
+  const s = await read(page); expect(s.itemsByDay.today.map(t => t.id)).toEqual(['a','b']); expect(s.recurringItems[0].completed).toBe(false);
   await expect.poll(() => page.evaluate(() => window.__notifications.length)).toBe(3);
   await page.locator('[data-act="rtoggle"]').click(); expect((await read(page)).recurringItems[0].streak).toBe(4);
   await page.locator('[data-act="menu"][data-id="a"]').click(); await page.locator('[data-m="move:tomorrow"]').click();
@@ -136,23 +166,24 @@ test('rollover, move, pin/unpin, habit streak and reminder retain metadata', asy
   expect((await read(page)).itemsByDay.today.find(t => t.id === 'a')).toMatchObject(linked);
 });
 
-test('old backup imports, invalid backup leaves state intact, migration snapshot is retained', async ({ page }) => {
-  const old = snapshot({ itemsByDay: { today: [item('legacy', '旧任务')], tomorrow: [], dayAfterTomorrow: [] } });
-  await boot(page, old);
-  expect(await page.evaluate(key => !!localStorage.getItem(key + '/before-v2'), KEY)).toBe(true);
+test('v3 backup imports, invalid or legacy backup is rejected and leaves state intact', async ({ page }) => {
+  const backupSeed = snapshot({ itemsByDay: { today: [item('v3-task', '导入的任务')], tomorrow: [], dayAfterTomorrow: [] } });
+  const backupDoc = buildDoc(backupSeed);
+  const v3Backup = exportDocument(backupDoc, projectView(backupDoc, backupSeed));
+  await boot(page, snapshot());
   await add(page, '新任务 +工作 #重要');
   await page.locator('[data-act="settings"]').click();
-  await page.evaluate(() => { window.__imported = '{"itemsByDay":{"today":{}}}'; });
+  await page.evaluate(() => { window.__imported = '{"schemaVersion":2,"itemsByDay":{"today":[]}}'; });
   await page.locator('[data-s="import"]').click(); await expect(page.locator('.classification-notice')).toContainText('导入失败');
   expect((await read(page)).projects).toHaveLength(1);
-  await page.evaluate(data => { window.__imported = JSON.stringify(data); }, old);
+  await page.evaluate(data => { window.__imported = JSON.stringify(data); }, v3Backup);
   await page.locator('[data-s="import"]').click();
   await page.locator('[data-import-confirm]').click();
-  expect((await read(page)).itemsByDay.today.find(t => t.id === 'legacy')).toMatchObject({ projectId: null, tagIds: [] });
-  await expect(page.locator('.row .title')).toHaveText(['新任务', '旧任务']);
+  expect((await read(page)).itemsByDay.today.find(t => t.id === 'v3-task')).toMatchObject({ projectId: null, tagIds: [] });
+  await expect(page.locator('.row .title')).toHaveText(['新任务', '导入的任务']);
 });
 
-test('light/dark and compact layouts keep controls and modals inside the window', async ({ page }) => {
+test('light/dark and compact layouts keep controls and modals inside the window without misalignment', async ({ page }) => {
   await boot(page, snapshot()); await add(page, '任务 +网站改版 #设计 #重要 #讨论 #待办 #第五个');
   await expect(page.locator('.tag-overflow')).toHaveText('+1');
   for (const theme of ['light', 'dark']) {
@@ -161,6 +192,14 @@ test('light/dark and compact layouts keep controls and modals inside the window'
     const inputBox = await page.locator('#main-input').boundingBox(); expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(340);
   }
   await page.setViewportSize({ width: 220, height: 180 });
+  await expect(page.locator('html')).toHaveClass(/compact/);
+  await expect(page.locator('.tag-overflow')).toHaveText('+2');
+  // Verify compact topbar and row inline metadata do not overlap or wrap abnormally
+  const filterBar = await page.locator('.compact-topbar .filter-bar').boundingBox();
+  const expandBtn = await page.locator('.compact-topbar .expand-btn').boundingBox();
+  expect(filterBar.x + filterBar.width).toBeLessThanOrEqual(expandBtn.x);
+  const rowBox = await page.locator('.row').first().boundingBox();
+  expect(rowBox.height).toBeLessThanOrEqual(36);
   await page.locator('[data-class-ui="filter-projects"]').click();
   const box = await page.getByRole('dialog').boundingBox(); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(220); expect(box.y + box.height).toBeLessThanOrEqual(180);
   await closePanel(page); await page.setViewportSize({ width: 340, height: 734 }); await expect(page.locator('#main-input')).toBeVisible();

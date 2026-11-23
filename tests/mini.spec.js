@@ -1,18 +1,77 @@
 import { test, expect } from '@playwright/test';
+import { newDocument, commitView, projectView, dateInZone, isoDate } from '../src/sync-model.js';
 
-const KEY = 'floating-todo/snapshot';
+const CACHE_KEY = 'floating-todo/v3-preview';
+const baseView = () => ({
+  schemaVersion: 3,
+  selectedDay: 'today',
+  projects: [],
+  tags: [],
+  colorCounters: { projects: 0, tags: 0 },
+  itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] },
+  recurringItems: [],
+  settings: { appearance: 'light', opacity: 0.78 },
+  memo: { text: '', expanded: false },
+  lastActiveDate: dateInZone(),
+});
+
+function buildV3Doc(seed) {
+  const doc = newDocument();
+  const base = baseView();
+  const view = {
+    ...base,
+    ...seed,
+    projects: (seed.projects || []).map(p => ({ ...p })),
+    tags: (seed.tags || []).map(t => ({ ...t })),
+    itemsByDay: {
+      today: (seed.itemsByDay?.today || []).map(t => ({ projectId: null, tagIds: [], detail: '', time: null, completed: false, createdAt: 1, ...t })),
+      tomorrow: (seed.itemsByDay?.tomorrow || []).map(t => ({ projectId: null, tagIds: [], detail: '', time: null, completed: false, createdAt: 1, ...t })),
+      dayAfterTomorrow: (seed.itemsByDay?.dayAfterTomorrow || []).map(t => ({ projectId: null, tagIds: [], detail: '', time: null, completed: false, createdAt: 1, ...t })),
+    },
+    recurringItems: (seed.recurringItems || []).map(t => ({
+      projectId: null, tagIds: [], detail: '', time: null, completed: false, createdAt: 1,
+      ...(t.lastDone && t.streak > 0 ? { legacyStreak: { date: isoDate(t.lastDone), count: t.streak } } : {}),
+      ...t,
+    })),
+    settings: { ...base.settings, ...(seed.settings || {}) },
+    memo: { ...base.memo, ...(seed.memo || {}) },
+    lastActiveDate: isoDate(seed.lastActiveDate || base.lastActiveDate),
+  };
+  commitView(doc, { ...base, lastActiveDate: view.lastActiveDate }, view);
+  view.itemsByDay.today.forEach((t, i) => {
+    const orderRev = doc.revisions.find(r => r.entityType === 'order' && r.entityId === t.id);
+    if (orderRev) orderRev.payload.position = i;
+  });
+  view.itemsByDay.tomorrow.forEach((t, i) => {
+    const orderRev = doc.revisions.find(r => r.entityType === 'order' && r.entityId === t.id);
+    if (orderRev) orderRev.payload.position = i;
+  });
+  view.itemsByDay.dayAfterTomorrow.forEach((t, i) => {
+    const orderRev = doc.revisions.find(r => r.entityType === 'order' && r.entityId === t.id);
+    if (orderRev) orderRev.payload.position = i;
+  });
+  view.recurringItems.forEach((t, i) => {
+    const orderRev = doc.revisions.find(r => r.entityType === 'order' && r.entityId === t.id);
+    if (orderRev) orderRev.payload.position = i;
+  });
+  return doc;
+}
 
 async function boot(page, { width = 340, height = 560, scale = 1, selectedDay = 'today', taskCount = 2 } = {}) {
+  const doc = buildV3Doc({
+    selectedDay,
+    itemsByDay: {
+      today: Array.from({ length: taskCount }, (_, i) => ({ id: `task-${i}`, title: `待办 ${i + 1}` })),
+      tomorrow: [{ id: 'c', title: '准备评审' }],
+      dayAfterTomorrow: [],
+    },
+    recurringItems: [{ id: 'habit', title: '喝水' }],
+    settings: { appearance: 'light', opacity: 0.78 },
+  });
   await page.setViewportSize({ width, height });
   await page.exposeFunction('__setNativeViewport', async (size) => { await page.setViewportSize(size); });
-  await page.addInitScript(({ key, width, height, scale, selectedDay, taskCount }) => {
-    const date = new Date();
-    const task = (id, title) => ({ id, title, detail: '', time: null, completed: false, notified: false, createdAt: 1 });
-    localStorage.setItem(key, JSON.stringify({ selectedDay,
-      itemsByDay: { today: Array.from({ length: taskCount }, (_, i) => task(`task-${i}`, `待办 ${i + 1}`)), tomorrow: [task('c', '准备评审')], dayAfterTomorrow: [] },
-      recurringItems: [task('habit', '喝水')], settings: { appearance: 'light', opacity: .78 },
-      lastActiveDate: `${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}`,
-    }));
+  await page.addInitScript(({ key, rawDoc, width, height, scale }) => {
+    if (!localStorage.getItem(key)) localStorage.setItem(key, rawDoc);
     const native = window.__native = {
       x: 1000, y: 80, width: width * scale, height: height * scale, scale, min: { width: 220, height: 180 },
       resizable: true, calls: [], listeners: {}, failNextSize: false,
@@ -46,21 +105,17 @@ async function boot(page, { width = 340, height = 560, scale = 1, selectedDay = 
       event: { listen: (name, cb) => { native.listeners[name] = cb; return Promise.resolve(() => {}); } },
       window: { getCurrentWindow: () => win, PhysicalSize, PhysicalPosition, LogicalSize,
         currentMonitor: async () => ({ workArea: native.workArea || { position: { x: -2000, y: 0 }, size: { width: 6000, height: 3000 } } }),
-        cursorPosition: async () => {
-          if (native.pauseCursor) {
-            native.pauseCursor = false;
-            await new Promise(resolve => { native.resumeCursor = resolve; });
-          }
-          return native.cursor;
-        },
       },
     };
-  }, { key: KEY, width, height, scale, selectedDay, taskCount });
+  }, { key: CACHE_KEY, rawDoc: JSON.stringify(doc), width, height, scale });
   await page.goto('/');
   await expect(page.locator('[data-act="collapse"]')).toBeVisible();
 }
 const mode = (page, value) => expect(page.locator('html')).toHaveAttribute('data-window-mode', value);
-const snapshot = page => page.evaluate(key => JSON.parse(localStorage.getItem(key)), KEY);
+async function snapshot(page) {
+  const raw = await page.evaluate(key => localStorage.getItem(key), CACHE_KEY);
+  return projectView(JSON.parse(raw), baseView());
+}
 test('recent preview stacks compact cards and completes tasks in place', async ({ page }, testInfo) => {
   await boot(page); await collapse(page);
   await page.locator('.mini-peek').click(); await mode(page, 'stack');
@@ -251,42 +306,6 @@ test('failed native size change restores the panel and permits a later retry', a
   await expect(page.locator('#main-input')).toBeVisible();
   await collapse(page);
 });
-
-test('captured southwest resize keeps compact after a single crossing and collapses in the upper-right quadrant', async ({ page }) => {
-  await boot(page);
-  await page.mouse.move(4, 556); await page.mouse.down();
-  const sample = async (x, y) => {
-    await page.evaluate(({ x, y }) => { __native.cursor = { x, y }; }, { x, y });
-    await page.locator('.resize.sw').dispatchEvent('pointermove', { pointerId: 1, buttons: 1 });
-  };
-  await sample(1124, 256);
-  await expect.poll(() => page.viewportSize()).toEqual({ width: 220, height: 180 });
-  await expect(page.locator('html')).toHaveClass(/compact/);
-  // center=(1230,170): right only, then above only, then both.
-  await sample(1240, 230); await expect.poll(() => page.evaluate(() => __native.x)).toBe(1120);
-  await mode(page, 'panel');
-  await sample(1140, 160); await mode(page, 'panel');
-  await sample(1240, 160); await mode(page, 'mini');
-  await page.mouse.up();
-  await expect.poll(() => page.viewportSize()).toEqual({ width: 188, height: 68 });
-  await page.locator('.mini-count').click();
-  await expect.poll(() => page.viewportSize()).toEqual({ width: 340, height: 560 });
-});
-
-for (const cancel of [true, false]) {
-  test(`pending native drag sample ${cancel ? 'is cancelled by blur' : 'finishes after pointer release'}`, async ({ page }) => {
-    await boot(page);
-    await page.mouse.move(4, 556); await page.mouse.down();
-    await page.evaluate(() => { __native.pauseCursor = true; __native.cursor = { x: 1240, y: 160 }; });
-    await page.locator('.resize.sw').dispatchEvent('pointermove', { pointerId: 1, buttons: 1 });
-    await expect.poll(() => page.evaluate(() => typeof __native.resumeCursor)).toBe('function');
-    if (cancel) await page.evaluate(() => window.dispatchEvent(new Event('blur')));
-    await page.mouse.up();
-    await page.evaluate(() => __native.resumeCursor());
-    await mode(page, cancel ? 'panel' : 'mini');
-    await expect.poll(() => page.viewportSize()).toEqual(cancel ? { width: 340, height: 560 } : { width: 188, height: 68 });
-  });
-}
 
 test('mini and quick layouts fit the window in both themes', async ({ page }, testInfo) => {
   await boot(page); await collapse(page);

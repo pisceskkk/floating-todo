@@ -35,14 +35,15 @@ export function createClassificationUI({ getState, save, render, openSettings })
     const rgb = project.color.slice(1).match(/../g).map(n => parseInt(n, 16)).join(',');
     return ` style="--project-rgb:${rgb}" data-project-color`;
   }
-  function rowMetadata(task) {
+  function rowMetadata(task, compact = false) {
     const tags = task.tagIds.map(id => getState().tags.find(t => t.id === id)).filter(Boolean);
     const project = getState().projects.find(p => p.id === task.projectId);
     if (!tags.length && !project) return '';
-    return `<button class="task-categories" data-class-ui="task" data-task="${esc(task.id)}" aria-label="编辑项目与标签：${esc([project?.name, ...tags.map(t => t.name)].filter(Boolean).join('、'))}" title="${esc([project ? '项目：' + project.name : '', ...tags.map(t => '#' + t.name)].filter(Boolean).join(' · '))}">
-      ${tags.slice(0, 4).map(t => `<span title="${esc(t.name)}">${dot(t.color)}</span>`).join('')}
-      ${tags.length > 4 ? `<span class="tag-overflow">+${tags.length - 4}</span>` : ''}
-      ${!tags.length && project ? `<span class="project-caption">${esc(project.name)}</span>` : ''}
+    const limit = compact ? 3 : 4;
+    return `<button class="task-categories${compact ? ' compact-meta' : ''}" data-class-ui="task" data-task="${esc(task.id)}" aria-label="编辑项目与标签：${esc([project?.name, ...tags.map(t => t.name)].filter(Boolean).join('、'))}" title="${esc([project ? '项目：' + project.name : '', ...tags.map(t => '#' + t.name)].filter(Boolean).join(' · '))}">
+      ${tags.slice(0, limit).map(t => `<span title="${esc(t.name)}">${dot(t.color)}</span>`).join('')}
+      ${tags.length > limit ? `<span class="tag-overflow">+${tags.length - limit}</span>` : ''}
+      ${!tags.length && project ? (compact ? `<span title="${esc(project.name)}">${dot(project.color)}</span>` : `<span class="project-caption">${esc(project.name)}</span>`) : ''}
     </button>`;
   }
 

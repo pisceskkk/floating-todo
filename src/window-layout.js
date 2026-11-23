@@ -39,17 +39,3 @@ export function anchoredBounds(frame, size, workArea) {
   }
   return { x: Math.round(x), y: Math.round(y), width, height, scale };
 }
-
-// The top-right corner remains anchored during a southwest resize. All cursor
-// and frame coordinates are physical pixels, including on scaled displays.
-export function southwestResize(frame, start, pointer) {
-  const minWidth = Math.round(PANEL_MIN.width * frame.scale);
-  const minHeight = Math.round(PANEL_MIN.height * frame.scale);
-  const width = Math.round(Math.max(minWidth, Math.min(PANEL_MAX.width * frame.scale, frame.width - (pointer.x - start.x))));
-  const height = Math.round(Math.max(minHeight, Math.min(PANEL_MAX.height * frame.scale, frame.height + (pointer.y - start.y))));
-  const x = frame.x + frame.width - width;
-  const bounds = { ...frame, x, width, height };
-  const collapse = width === minWidth && height === minHeight
-    && pointer.x > x + width / 2 && pointer.y < frame.y + height / 2;
-  return { bounds, collapse };
-}

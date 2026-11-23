@@ -5,10 +5,6 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# Swift（legacy）构建产物
-legacy-macos-swift/.build/
-.build/
-
 # macOS
 .DS_Store
 

@@ -1,17 +1,15 @@
-import { PANEL_MIN, PANEL_DEFAULT, BAR_SIZE, CAPTURE_SIZE, STACK_SIZE, TASKS_SIZE, floatingBounds, isCompact, anchoredBounds, southwestResize } from './window-layout.js';
+import { PANEL_MIN, PANEL_DEFAULT, BAR_SIZE, CAPTURE_SIZE, STACK_SIZE, TASKS_SIZE, floatingBounds, isCompact, anchoredBounds } from './window-layout.js';
 
-export function createWindowController({ api, moveToScreen, onChange, onError }) {
-  const native = api?.getCurrentWindow?.();
+export function createWindowController({ api, moveToScreen, onChange, onError, mobile = false }) {
+  const native = mobile ? null : api?.getCurrentWindow?.();
   let mode = 'panel';
   let transitioning = false;
   let lastFullSize = { ...PANEL_DEFAULT };
-  let resize = null;
-  let resizeTask = Promise.resolve();
   let task = Promise.resolve();
   let direction = { horizontal: 'left', vertical: 'down' };
 
   function observeSize() {
-    if (mode !== 'panel' || transitioning || resize) return;
+    if (mobile || mode !== 'panel' || transitioning) return;
     const size = { width: innerWidth, height: innerHeight };
     if (!isCompact(size)) lastFullSize = size;
   }
@@ -28,20 +26,12 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
     await moveToScreen(bounds.x, bounds.y);
   }
 
-  function releaseResize() {
-    const current = resize;
-    resize = null;
-    if (current?.handle.hasPointerCapture(current.pointerId)) current.handle.releasePointerCapture(current.pointerId);
-    document.documentElement.classList.remove('window-resizing');
-  }
-
   function setMode(next) {
+    if (mobile) return Promise.resolve(next === 'panel');
     // Serialize requests: native resize events can arrive between size and
     // position updates, and must never switch a mini window to compact mode.
     task = task.then(async () => {
       if (next === mode && (next !== 'panel' || !isCompact({ width: innerWidth, height: innerHeight }))) return true;
-      releaseResize();
-      await resizeTask;
       observeSize();
       const previous = mode;
       const previousDirection = direction;
@@ -98,81 +88,11 @@ export function createWindowController({ api, moveToScreen, onChange, onError })
     return task;
   }
 
-  function attachResize(handle) {
-    handle.addEventListener('pointerdown', async (event) => {
-      if (event.button !== 0 || mode !== 'panel' || transitioning || resize) return;
-      if (!native) return;
-      event.preventDefault();
-      observeSize();
-      const current = { handle, pointerId: event.pointerId, ready: false, pending: false, running: false };
-      resize = current;
-      handle.setPointerCapture(event.pointerId);
-      document.documentElement.classList.add('window-resizing');
-      try {
-        current.frame = await frame();
-        current.bounds = current.frame;
-        current.start = { x: current.frame.x + event.clientX * current.frame.scale, y: current.frame.y + event.clientY * current.frame.scale };
-        current.ready = true;
-        if (resize === current && current.pending) sampleResize(current);
-      } catch (error) { releaseResize(); onError(error); }
-    });
-    handle.addEventListener('pointermove', (event) => {
-      if (resize?.pointerId !== event.pointerId || resize.finishing) return;
-      if (!(event.buttons & 1)) { finishResize(event); return; }
-      resize.pending = true;
-      sampleResize(resize);
-    });
-    handle.addEventListener('pointerup', finishResize);
-    handle.addEventListener('pointercancel', releaseResize);
-    handle.addEventListener('lostpointercapture', () => { if (!resize?.finishing) releaseResize(); });
-    window.addEventListener('blur', releaseResize);
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && resize) { event.preventDefault(); releaseResize(); }
-    });
-  }
-
-  function finishResize(event) {
-    if (resize?.pointerId !== event.pointerId) return;
-    resize.finishing = true;
-    resize.pending = true;
-    sampleResize(resize);
-  }
-
-  function sampleResize(current) {
-    if (!current.ready || current.running || resize !== current) return;
-    current.running = true;
-    resizeTask = (async () => {
-      try {
-        while (resize === current && current.pending) {
-          current.pending = false;
-          const pointer = await api.cursorPosition();
-          if (resize !== current) break;
-          const result = southwestResize(current.frame, current.start, pointer);
-          if (['x', 'y', 'width', 'height'].some(key => result.bounds[key] !== current.bounds[key])) {
-            await setBounds(result.bounds);
-            current.bounds = result.bounds;
-          }
-          if (resize !== current) break;
-          if (result.collapse) {
-            releaseResize();
-            // Queue after this sample completes to avoid racing native geometry.
-            setMode('mini');
-            break;
-          }
-        }
-      } catch (error) { releaseResize(); onError(error); }
-      finally {
-        current.running = false;
-        if (resize === current && current.finishing) releaseResize();
-      }
-    })();
-  }
-
   return {
     get mode() { return mode; },
     get direction() { return direction; },
     get floating() { return mode !== 'panel'; },
     get transitioning() { return transitioning; },
-    observeSize, setMode, attachResize,
+    observeSize, setMode,
   };
 }

@@ -44,15 +44,26 @@ pub async fn lan_device_name() -> String {
             }
         }
     }
-    for key in ["COMPUTERNAME", "HOSTNAME"] {
-        if let Ok(name) = std::env::var(key) {
-            let name = name.trim();
-            if !name.is_empty() {
-                return name.chars().take(40).collect();
+    #[cfg(target_os = "ios")]
+    {
+        return "iPhone".into();
+    }
+    #[cfg(target_os = "android")]
+    {
+        return "Android".into();
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        for key in ["COMPUTERNAME", "HOSTNAME"] {
+            if let Ok(name) = std::env::var(key) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return name.chars().take(40).collect();
+                }
             }
         }
+        "floating todo".into()
     }
-    "floating todo".into()
 }
 
 #[tauri::command]
@@ -80,16 +91,19 @@ pub async fn lan_start(
         .query_row("SELECT value FROM vault WHERE id=1", [], |r| r.get(0))
         .optional()
         .map_err(|e| e.to_string())?;
-    let entry =
-        keyring::Entry::new("com.gaopengfei.floating-todo", &account).map_err(|e| e.to_string())?;
-    let key = match entry.get_password() {
+    let key = match crate::credential_store::get_password(&app, "com.gaopengfei.floating-todo", &account) {
         Ok(value) => value,
-        Err(keyring::Error::NoEntry) if encrypted.is_none() => {
+        Err(crate::credential_store::GetError::NoEntry) if encrypted.is_none() => {
             let key = floating_todo_lan::storage_key();
-            entry.set_password(&key).map_err(|e| e.to_string())?;
+            crate::credential_store::set_password(&app, "com.gaopengfei.floating-todo", &account, &key)?;
             key
         }
-        Err(e) => return Err(format!("读取系统配对密钥失败：{e}")),
+        Err(crate::credential_store::GetError::NoEntry) => {
+            return Err("读取系统配对密钥失败：未找到配对密钥".into())
+        }
+        Err(crate::credential_store::GetError::Other(e)) => {
+            return Err(format!("读取系统配对密钥失败：{e}"))
+        }
     };
     let vault = if let Some(value) = encrypted {
         serde_json::from_str::<Vault>(&floating_todo_lan::decrypt_vault(&key, &id, &value)?)

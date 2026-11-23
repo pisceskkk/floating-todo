@@ -1,11 +1,11 @@
-import { canonical, digest, migrateSnapshot, projectView, commitView, mergeRevisions, conflicts, exportDocument, currentEntities, importRevisionsAsEdits, newDocument } from './sync-model.js';
+import { canonical, digest, projectView, commitView, mergeRevisions, conflicts, exportDocument, currentEntities, importRevisionsAsEdits, newDocument } from './sync-model.js';
 const CACHE_KEY = 'floating-todo/v3-preview';
 export class SyncStore {
   constructor({ invoke, native = false, onChange = () => {}, onStatus = () => {} }) {
     this.invoke = invoke; this.native = native; this.onChange = onChange; this.onStatus = onStatus;
     this.queue = Promise.resolve(); this.error = ''; this.busy = false; this.timer = null; this.retryAt = 0; this.failures = 0; this.persistedGeneration = 0;
   }
-  async init(legacy, raw) {
+  async init(defaults) {
     const saved = this.native ? await this.invoke('storage_load') : localStorage.getItem(CACHE_KEY);
     if (saved) {
       this.doc = JSON.parse(saved);
@@ -13,24 +13,25 @@ export class SyncStore {
       if (this.doc.schemaVersion !== 3 || this.doc.protocolVersion !== 1) throw new Error('本地数据库来自不支持的版本');
       const check = newDocument(); mergeRevisions(check, this.doc.revisions);
     } else {
-      this.doc = await migrateSnapshot(legacy);
-      await this.persist(raw);
+      this.doc = newDocument();
+      this.doc.local = {
+        settings: structuredClone(defaults.settings),
+        selectedDay: defaults.selectedDay,
+        memoExpanded: defaults.memo.expanded,
+        colorCounters: structuredClone(defaults.colorCounters),
+      };
+      await this.persist();
     }
-    this.base = structuredClone(legacy);
+    this.base = structuredClone(defaults);
     this.view = projectView(this.doc, this.base);
-    this.mirror();
     return structuredClone(this.view);
   }
-  mirror() {
-    // Browser preview compatibility only. Native authoritative data lives in SQLite.
-    if (!this.native) localStorage.setItem('floating-todo/snapshot', JSON.stringify(this.view));
-  }
-  persist(legacy = null) {
+  persist() {
     const json = JSON.stringify(this.doc);
     // A failed write does not poison later retries. flush() still reports the failure.
     this.queue = this.queue.catch(() => {}).then(async () => {
       if (this.native) {
-        const generation = await this.invoke('storage_save', { json, legacy, expectedGeneration: this.persistedGeneration });
+        const generation = await this.invoke('storage_save', { json, expectedGeneration: this.persistedGeneration });
         this.persistedGeneration = generation ?? this.persistedGeneration + 1;
       }
       else localStorage.setItem(CACHE_KEY, json);
@@ -41,11 +42,11 @@ export class SyncStore {
   }
   commit(view) {
     commitView(this.doc, this.view, view);
-    this.view = structuredClone(view); this.mirror();
+    this.view = structuredClone(view);
     this.persist(); this.schedule();
   }
   refresh(notify = true) {
-    this.view = projectView(this.doc, this.base); this.mirror();
+    this.view = projectView(this.doc, this.base);
     if (notify) this.onChange(structuredClone(this.view));
     return structuredClone(this.view);
   }
@@ -60,7 +61,7 @@ export class SyncStore {
     return this.deviceNamePromise;
   }
   async configureLan(enabled, name = this.doc.lan?.name) {
-    if (!this.native) throw new Error('局域网同步仅在桌面应用中可用');
+    if (!this.native) throw new Error('局域网同步仅在客户端应用中可用');
     if (this.lanBusy) throw new Error('正在同步，请稍后修改连接');
     name = name?.trim();
     if (!name || name === '我的待办') name = await this.lanDeviceName();
@@ -145,7 +146,7 @@ export class SyncStore {
   }
   async configure(config, password) {
     if (this.busy) throw new Error('同步进行中，请完成后再修改连接');
-    if (!this.native) throw new Error('WebDAV 连接仅在桌面应用中可用');
+    if (!this.native) throw new Error('WebDAV 连接仅在客户端应用中可用');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(config.spaceId)) throw new Error('同步空间名称仅允许字母、数字、下划线和短横线');
     const changed = this.doc.sync.url !== config.url || this.doc.sync.username !== config.username || this.doc.sync.spaceId !== config.spaceId;
     if (password) await this.invoke('sync_set_password', { config, password });
@@ -227,7 +228,7 @@ export class SyncStore {
   }
   async sync(force = false) {
     if (this.busy || this.lanBusy || (!force && !this.doc.sync.enabled) || (this.canSync && !this.canSync())) return;
-    if (!this.native) throw new Error('请在桌面应用中使用 WebDAV 同步');
+    if (!this.native) throw new Error('请在客户端应用中使用 WebDAV 同步');
     this.busy = true; this.error = ''; this.onStatus();
     const before = new Set(conflicts(this.doc).map(c => c.key));
     try {
@@ -245,13 +246,12 @@ export class SyncStore {
     } finally { this.busy = false; this.onStatus(); }
   }
   backup(view) { return exportDocument(this.doc, view); }
-  async prepareImport(parsed, normalize, defaults) {
-    if (parsed.schemaVersion === 3) {
-      if (parsed.syncData?.protocolVersion !== 1 || !Array.isArray(parsed.syncData.revisions)) throw new Error('备份缺少 v3 数据');
-      const source = newDocument(); mergeRevisions(source, parsed.syncData.revisions);
-      return source.revisions;
+  async prepareImport(parsed) {
+    if (!parsed || typeof parsed !== 'object' || parsed.schemaVersion !== 3 || parsed.syncData?.protocolVersion !== 1 || !Array.isArray(parsed.syncData.revisions)) {
+      throw new Error('仅支持导入 v3 格式备份文件');
     }
-    const source = await migrateSnapshot(normalize(parsed, defaults)); return source.revisions;
+    const source = newDocument(); mergeRevisions(source, parsed.syncData.revisions);
+    return source.revisions;
   }
   previewImport(revisions) {
     const source = newDocument(); mergeRevisions(source, revisions);

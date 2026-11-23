@@ -1,5 +1,5 @@
 /* 悬浮待办 · 跨平台前端逻辑 (Tauri v2 + 原生 JS) */
-import { SCHEMA_VERSION, normalizeSnapshot, parseClassification, resolveClassification, editText } from './classification.js';
+import { SCHEMA_VERSION, parseClassification, resolveClassification, editText } from './classification.js';
 import { createClassificationUI } from './classification-ui.js';
 import { reorderVisibleItems, recentTasks } from './todo-order.js';
 import { createWindowController } from './window-controller.js';
@@ -14,6 +14,8 @@ let memoSaveTimer = null;
 const TAURI = window.__TAURI__;
 const appWindow = TAURI?.window?.getCurrentWindow?.();
 const isWindows = /Windows/i.test(navigator.userAgent);
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+if (isMobile) document.documentElement.classList.add('platform-mobile');
 const defaultSurfaceStyle = () => (isWindows ? "flat" : "glass");
 
 async function openExternal(url) {
@@ -29,7 +31,6 @@ async function openExternal(url) {
 
 const DAYS = ["today", "tomorrow", "dayAfterTomorrow"];
 const DAY_TITLE = { today: "今天", tomorrow: "明天", dayAfterTomorrow: "后天" };
-const STORAGE_KEY = "floating-todo/snapshot";
 
 const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
@@ -110,30 +111,7 @@ function defaultState() {
   };
 }
 
-let startupNotice = '';
-function load() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return defaultState();
-  let state;
-  try {
-    const parsed = JSON.parse(raw);
-    state = normalizeSnapshot(parsed, defaultState());
-    if ((parsed.schemaVersion || 1) < SCHEMA_VERSION && !localStorage.getItem(STORAGE_KEY + '/before-v2')) {
-      localStorage.setItem(STORAGE_KEY + '/before-v2', raw);
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (error) {
-    // Keep the original snapshot recoverable before any subsequent save.
-    localStorage.setItem(STORAGE_KEY + '/recovery/' + Date.now(), raw);
-    startupNotice = '本地数据未能加载，原始快照已保留：' + error.message;
-    return defaultState();
-  }
-  if (isWindows && state.settings.showOnDesktop) state.settings.alwaysOnTop = false;
-  return state;
-}
-
-const legacyRaw = localStorage.getItem(STORAGE_KEY);
-let state = load();
+let state = defaultState();
 syncStore = new SyncStore({
   invoke: (name, args) => TAURI.core.invoke(name, args),
   native: !!window.__TAURI_INTERNALS__,
@@ -141,7 +119,8 @@ syncStore = new SyncStore({
   onStatus: () => window.dispatchEvent(new Event('todo-sync-status')),
 });
 try {
-  state = await syncStore.init(state, legacyRaw);
+  state = await syncStore.init(state);
+  if (isWindows && state.settings.showOnDesktop) state.settings.alwaysOnTop = false;
 } catch (error) {
   document.getElementById('app').textContent = `本地数据库无法打开，已停止写入以保留数据。请重启或恢复备份。${error}`;
   throw error;
@@ -337,6 +316,7 @@ const windowUI = createWindowController({
   moveToScreen: (x, y) => TAURI.core.invoke('set_window_screen_position', { x, y }),
   onChange: () => { updateCompact(false); render(); },
   onError: (error) => { console.error('Failed to change floating window', error); classificationUI.showNotice('窗口切换失败，请重试'); },
+  mobile: isMobile,
 });
 let compact = false;
 let activeMenu = null; // { id, day, kind }
@@ -468,14 +448,15 @@ function rowHtml(it, day, kind) {
     kind === "recurring" && it.streak > 0
       ? `<span class="streak-chip" title="已连续 ${it.streak} 天">🔥${it.streak}</span>`
       : "";
+  const meta = classificationUI.rowMetadata(it, compact);
   return `<div class="row ${it.completed ? "done" : ""}" data-row="${it.id}" data-kind="${kind}" data-day="${day}"${classificationUI.rowStyle(it)}>
     <div class="check ${it.completed ? "on" : ""}" data-act="${kind === "recurring" ? "rtoggle" : "toggle"}" data-id="${it.id}" data-day="${day}">${it.completed ? ICONS.check : ""}</div>
     <div class="body" data-act="${editAct}" data-id="${it.id}" data-day="${day}">
       <div class="title">${esc(it.title)}${timeChip}${streakChip}</div>
-      ${classificationUI.rowMetadata(it)}
+      ${compact ? "" : meta}
       ${detail}
     </div>
-    ${badge}${actions}
+    ${compact ? meta : ""}${badge}${actions}
     <button type="button" class="drag-handle" title="拖拽排序（Alt + ↑ / ↓）" aria-label="拖拽排序：${esc(it.title)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"><svg viewBox="0 0 12 18" width="12" height="18" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="9" cy="3" r="1.2"/><circle cx="3" cy="9" r="1.2"/><circle cx="9" cy="9" r="1.2"/><circle cx="3" cy="15" r="1.2"/><circle cx="9" cy="15" r="1.2"/></svg></button>
   </div>`;
 }
@@ -512,7 +493,7 @@ function render() {
     html += `<div class="header">
       <div class="titles"><h1>悬浮待办</h1><p>${sub}</p></div>
       <div class="spacer"></div>
-      <button class="count-pill ${cnt === 0 ? "zero" : ""}" data-act="collapse" title="收起为悬浮栏" aria-label="${cnt} 件待办，收起为悬浮栏">${cnt > 99 ? '99+' : cnt}</button>
+      ${isMobile ? "" : `<button class="count-pill ${cnt === 0 ? "zero" : ""}" data-act="collapse" title="收起为悬浮栏" aria-label="${cnt} 件待办，收起为悬浮栏">${cnt > 99 ? '99+' : cnt}</button>`}
       <button class="icon-btn" data-act="settings" title="设置">${ICONS.gear}</button>
     </div>`;
 
@@ -523,9 +504,13 @@ function render() {
       </div>`;
     });
     html += `</div>`;
+    html += classificationUI.filterBar();
+  } else {
+    html += `<div class="compact-topbar">
+      ${classificationUI.filterBar()}
+      <button class="icon-btn sm expand-btn" data-act="expand" title="放大">${ICONS.expand}</button>
+    </div>`;
   }
-
-  html += classificationUI.filterBar();
 
   if (showRecurring) {
     html += `<div class="recurring"><div class="head">
@@ -578,11 +563,6 @@ function render() {
       }
       html += `</div>`;
     }
-  }
-
-  // 紧凑模式放大按钮
-  if (compact) {
-    html += `<button class="icon-btn expand-btn" data-act="expand" title="放大">${ICONS.expand}</button>`;
   }
 
   app.innerHTML = html;
@@ -707,6 +687,7 @@ function commitTodoOrder(row, orderedIds) {
   if (row.dataset.kind === "recurring") state.recurringItems = ordered;
   else state.itemsByDay[row.dataset.day] = ordered;
   save();
+  state = syncStore.refresh(false);
 }
 
 function updateTodoDrag() {
@@ -1116,10 +1097,10 @@ function openSettings() {
     </div>
     <section class="settings-group" aria-labelledby="settings-window-title">
       <h3 id="settings-window-title">窗口与行为</h3>
-      <div class="set-row"><span>始终置顶</span><div class="switch ${s.alwaysOnTop ? "on" : ""}" data-s="alwaysOnTop"></div></div>
-      ${isWindows ? `<div class="set-row"><span>固定在桌面（Win+D 后仍显示）</span><div class="switch ${s.showOnDesktop ? "on" : ""}" data-s="showOnDesktop"></div></div>` : ""}
-      <div class="set-row"><span>鼠标穿透（点击落到下层）</span><div class="switch ${s.clickThrough ? "on" : ""}" data-s="clickThrough"></div></div>
-      <div class="set-row"><span>开机自启动</span><div class="switch" id="autostart-sw" data-s="autostart"></div></div>
+      ${isMobile ? "" : `<div class="set-row"><span>始终置顶</span><div class="switch ${s.alwaysOnTop ? "on" : ""}" data-s="alwaysOnTop"></div></div>`}
+      ${isWindows && !isMobile ? `<div class="set-row"><span>固定在桌面（Win+D 后仍显示）</span><div class="switch ${s.showOnDesktop ? "on" : ""}" data-s="showOnDesktop"></div></div>` : ""}
+      ${isMobile ? "" : `<div class="set-row"><span>鼠标穿透（点击落到下层）</span><div class="switch ${s.clickThrough ? "on" : ""}" data-s="clickThrough"></div></div>`}
+      ${isMobile ? "" : `<div class="set-row"><span>开机自启动</span><div class="switch" id="autostart-sw" data-s="autostart"></div></div>`}
       <div class="set-row"><span>开启备忘录</span><div class="switch ${s.memoEnabled ? "on" : ""}" data-s="memoEnabled"></div></div>
     </section>
     <section class="settings-group" aria-labelledby="settings-appearance-title">
@@ -1145,11 +1126,11 @@ function openSettings() {
           <button type="button" class="link-btn ${s.customBg ? "" : "muted"}" data-s="resetBg">恢复默认</button>
         </div>
       </div>
-      <div>
+      ${isMobile ? "" : `<div>
         <div class="set-row"><span>透明度</span><span class="set-muted">${Math.round(s.opacity * 100)}%</span></div>
         <input type="range" id="op-range" min="0.2" max="0.95" step="0.01" value="${s.opacity}"/>
       </div>
-      <div class="set-row" data-shadow-row ${surface === "flat" ? "" : "hidden"}><span>窗口阴影</span><button type="button" class="switch ${s.shadowEnabled !== false ? "on" : ""}" data-s="shadowEnabled" role="switch" aria-checked="${s.shadowEnabled !== false}" aria-label="窗口阴影"></button></div>
+      <div class="set-row" data-shadow-row ${surface === "flat" ? "" : "hidden"}><span>窗口阴影</span><button type="button" class="switch ${s.shadowEnabled !== false ? "on" : ""}" data-s="shadowEnabled" role="switch" aria-checked="${s.shadowEnabled !== false}" aria-label="窗口阴影"></button></div>`}
     </section>
     <section class="settings-group" aria-labelledby="settings-categories-title">
       <h3 id="settings-categories-title">分类</h3>
@@ -1164,16 +1145,16 @@ function openSettings() {
         <button class="data-btn" data-s="import">${ICONS.upload}<span>导入备份</span></button>
       </div>
     </section>
-    <section class="settings-group" data-update-panel></section>
+    ${isMobile ? "" : `<section class="settings-group" data-update-panel></section>`}
     <section class="settings-group" aria-labelledby="settings-notifications-title">
       <h3 id="settings-notifications-title">通知</h3>
       <div class="set-row"><span>本机到点提醒</span><button class="switch ${s.remindersEnabled !== false ? "on" : ""}" data-s="remindersEnabled" aria-label="本机到点提醒"></button></div>
     </section>
     <div class="settings-tips">
-      💡 全局快捷键 <b>${navigator.platform.includes("Mac") ? "⌘⇧Space" : "Ctrl+Shift+Space"}</b> 可在任意应用中唤起并聚焦输入框，快速记一笔。<br>
+      ${isMobile ? "" : `💡 全局快捷键 <b>${navigator.platform.includes("Mac") ? "⌘⇧Space" : "Ctrl+Shift+Space"}</b> 可在任意应用中唤起并聚焦输入框，快速记一笔。<br>`}
       ⏰ 输入「明天 15:00 开会」会自动识别日期与提醒时间。<br>
-      输入 <b>#标签</b> 或 <b>+项目</b> 可分类，方向键选择、Tab / Enter 补全。<br>
-      🖱️ 开启鼠标穿透后浮窗不再挡点击，可从<b>托盘菜单「切换鼠标穿透」</b>关回来。
+      输入 <b>#标签</b> 或 <b>+项目</b> 可分类，方向键选择、Tab / Enter 补全。
+      ${isMobile ? "" : `<br>🖱️ 开启鼠标穿透后浮窗不再挡点击，可从<b>托盘菜单「切换鼠标穿透」</b>关回来。`}
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -1240,7 +1221,7 @@ function openSettings() {
       save(); applyWindowChrome();
     }
   });
-  overlay.querySelector("#op-range").addEventListener("input", (e) => {
+  overlay.querySelector("#op-range")?.addEventListener("input", (e) => {
     state.settings.opacity = parseFloat(e.target.value);
     e.target.previousElementSibling.querySelector("span:last-child").textContent = Math.round(state.settings.opacity * 100) + "%";
     applyWindowChrome(); save();
@@ -1249,14 +1230,17 @@ function openSettings() {
     state.settings.customBg = hexToRgb(e.target.value);
     applyWindowChrome(); save();
   });
-  updateChecker.mount(overlay.querySelector("[data-update-panel]"));
+  const updatePanel = overlay.querySelector("[data-update-panel]");
+  if (updatePanel) updateChecker.mount(updatePanel);
   // 异步同步开机自启动开关的真实状态
-  (async () => {
-    try {
-      const on = await TAURI?.autostart?.isEnabled();
-      overlay.querySelector("#autostart-sw")?.classList.toggle("on", !!on);
-    } catch (e) {}
-  })();
+  if (!isMobile) {
+    (async () => {
+      try {
+        const on = await TAURI?.autostart?.isEnabled();
+        overlay.querySelector("#autostart-sw")?.classList.toggle("on", !!on);
+      } catch (e) {}
+    })();
+  }
 }
 
 async function toggleAutostart(sw) {
@@ -1279,7 +1263,7 @@ async function importBackup(overlay) {
     const content = await TAURI.core.invoke("import_data");
     if (!content) return;
     const parsed = JSON.parse(content);
-    const revisions = await syncStore.prepareImport(parsed, normalizeSnapshot, defaultState());
+    const revisions = await syncStore.prepareImport(parsed);
     const counts = syncStore.previewImport(revisions);
     overlay?.remove();
     confirmImport(counts, async () => {
@@ -1373,9 +1357,8 @@ async function expandWindow() {
 }
 
 document.querySelectorAll(".resize").forEach((h) => {
-  if (h.dataset.dir === 'SouthWest') { windowUI.attachResize(h); return; }
   h.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 || windowUI.floating || windowUI.transitioning) return;
+    if (isMobile || e.button !== 0 || windowUI.floating || windowUI.transitioning) return;
     e.preventDefault();
     appWindow?.startResizeDragging(h.dataset.dir).catch(() => {});
   });
@@ -1384,7 +1367,7 @@ document.querySelectorAll(".resize").forEach((h) => {
 function updateCompact(redraw = true) {
   windowUI.observeSize();
   const w = window.innerWidth, hh = window.innerHeight;
-  const c = !windowUI.floating && (w < 300 || hh < 280);
+  const c = !isMobile && !windowUI.floating && (w < 300 || hh < 280);
   if (c !== compact) { compact = c; document.documentElement.classList.toggle("compact", c); if (redraw) render(); }
   else { document.documentElement.classList.toggle("compact", c); }
 }
@@ -1439,13 +1422,12 @@ applyWindowChrome();
 setInterval(() => render(), 5 * 60 * 1000);
 setInterval(checkReminders, 30 * 1000);
 checkReminders();
-if (startupNotice) classificationUI.showNotice(startupNotice);
 
 syncStore.notice = text => classificationUI.showNotice(text);
 syncStore.canSync = () => !classificationUI.isComposing() && !memoSaveTimer && !composerEditId && !recurEditId &&
   !document.querySelector('.overlay:not(.sync-overlay)');
 syncStore.start();
-updateChecker.start();
+if (!isMobile) updateChecker.start();
 window.addEventListener('beforeunload', () => updateChecker.stop());
 window.addEventListener('beforeunload', () => syncStore.stop());
 

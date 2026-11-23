@@ -1,18 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newDocument, migrateSnapshot, projectView, writeRevision, mergeRevisions, currentEntities, conflicts, resolveConflict, commitView, setTaskOrder, exportDocument, importRevisionsAsEdits, canonical } from '../src/sync-model.js';
-const base = () => ({ schemaVersion: 2, selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 }, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { opacity: .7 }, memo: { text: '', expanded: false }, lastActiveDate: '2026-10-20' });
+import { newDocument, projectView, writeRevision, mergeRevisions, currentEntities, conflicts, resolveConflict, commitView, setTaskOrder, exportDocument, importRevisionsAsEdits } from '../src/sync-model.js';
+const base = () => ({ schemaVersion: 3, selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 }, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { opacity: .7 }, memo: { text: '', expanded: false }, lastActiveDate: '2026-10-20' });
 const task = (id, extra = {}) => ({ id, title: id, detail: '', time: null, completed: false, createdAt: 1, projectId: null, tagIds: [], ...extra });
 const payload = (id, extra = {}) => ({ ...task(id), kind: 'one_off', scheduledDate: '2026-10-20', ...extra });
 const fork = doc => ({ ...structuredClone(doc), deviceId: crypto.randomUUID(), outbox: [] });
 const active = (doc, id) => currentEntities(doc).get(`task:${id}`);
 
-test('migration deduplicates identical backups and does not fabricate modification times', async () => {
-  const s = base(); s.itemsByDay.today.push(task('a'));
-  const a = await migrateSnapshot(s), b = await migrateSnapshot(s);
-  assert.notEqual(a.deviceId, b.deviceId); assert.equal(mergeRevisions(a, b.revisions), 0);
-  assert.equal(active(a, 'a').modifiedAt, 0); assert.equal(conflicts(a).length, 0);
-});
+function seedDoc(s = base()) {
+  const doc = newDocument();
+  commitView(doc, base(), s);
+  doc.outbox = [];
+  return doc;
+}
+
 test('different tasks merge; concurrent edits converge in either delivery order and preserve all branches', () => {
   const root = newDocument(); writeRevision(root, 'task', 'a', payload('a'), { now: 100 });
   const devices = [fork(root), fork(root), fork(root)];
@@ -48,9 +49,9 @@ test('out of order revisions wait for parents; duplicate and tampered batches ar
   const invalid = { ...first, payload: { ...first.payload, title: 'tampered' } }, count = target.revisions.length;
   assert.throws(() => mergeRevisions(target, [invalid])); assert.equal(target.revisions.length, count);
 });
-test('rollover is a projection: completed history remains, overdue dates remain unchanged', async () => {
+test('rollover is a projection: completed history remains, overdue dates remain unchanged', () => {
   const s = base(); s.itemsByDay.today = [task('open'), task('done', { completed: true })]; s.itemsByDay.tomorrow = [task('tomorrow')];
-  const doc = await migrateSnapshot(s), count = doc.revisions.length;
+  const doc = seedDoc(s), count = doc.revisions.length;
   const view = projectView(doc, s, '2026-10-21');
   assert.deepEqual(new Set(view.itemsByDay.today.map(t => t.id)), new Set(['open', 'tomorrow']));
   assert.equal(view.itemsByDay.today.find(t => t.id === 'open').scheduledDate, '2026-10-20');
@@ -58,8 +59,8 @@ test('rollover is a projection: completed history remains, overdue dates remain 
   const after = structuredClone(view); after.itemsByDay.today[0].title = 'updated'; commitView(doc, view, after);
   assert.ok(!active(doc, 'done').deleted);
 });
-test('daily completions merge by date, cancel overrides same day, streak is derived', async () => {
-  const s = base(); s.recurringItems = [task('daily')]; const doc = await migrateSnapshot(s);
+test('daily completions merge by date, cancel overrides same day, streak is derived', () => {
+  const s = base(); s.recurringItems = [task('daily')]; const doc = seedDoc(s);
   const a = fork(doc), b = fork(doc);
   writeRevision(a, 'completion', 'daily/2026-10-20', { taskId: 'daily', date: '2026-10-20', completed: true });
   writeRevision(b, 'completion', 'daily/2026-10-21', { taskId: 'daily', date: '2026-10-21', completed: true });
@@ -67,24 +68,26 @@ test('daily completions merge by date, cancel overrides same day, streak is deri
   writeRevision(a, 'completion', 'daily/2026-10-21', { taskId: 'daily', date: '2026-10-21', completed: false });
   assert.equal(projectView(a, s, '2026-10-21').recurringItems[0].completed, false);
 });
-test('legacy streak is retained without inventing historical check-ins', async () => {
-  const s = base(); s.recurringItems = [task('daily', { completed: true, streak: 8, lastDone: '2026-10-20' })];
-  const doc = await migrateSnapshot(s);
-  assert.equal(doc.revisions.filter(r => r.entityType === 'completion').length, 1);
-  assert.equal(projectView(doc, s, '2026-10-20').recurringItems[0].streak, 8);
+test('legacy streak in v3 payload is retained without inventing historical check-ins', () => {
+  const doc = newDocument();
+  writeRevision(doc, 'task', 'daily', { ...task('daily'), kind: 'daily', scheduledDate: null, legacyStreak: { date: '2026-10-20', count: 8 } });
+  writeRevision(doc, 'completion', 'daily/2026-10-20', { taskId: 'daily', date: '2026-10-20', completed: true });
+  assert.equal(projectView(doc, base(), '2026-10-20').recurringItems[0].streak, 8);
   writeRevision(doc, 'completion', 'daily/2026-10-21', { taskId: 'daily', date: '2026-10-21', completed: true });
-  assert.equal(projectView(doc, s, '2026-10-21').recurringItems[0].streak, 9);
+  assert.equal(projectView(doc, base(), '2026-10-21').recurringItems[0].streak, 9);
+  writeRevision(doc, 'completion', 'daily/2026-10-20', { taskId: 'daily', date: '2026-10-20', completed: false });
+  assert.equal(projectView(doc, base(), '2026-10-20').recurringItems[0].streak, 7);
 });
-test('local preferences and notification receipts never create synchronized edits', async () => {
-  const s = base(); s.itemsByDay.today = [task('a', { time: '12:00' })]; const doc = await migrateSnapshot(s);
+test('local preferences and notification receipts never create synchronized edits', () => {
+  const s = base(); s.itemsByDay.today = [task('a', { time: '12:00' })]; const doc = seedDoc(s);
   const before = projectView(doc, s, '2026-10-20'), after = structuredClone(before), count = doc.revisions.length;
   after.settings.opacity = .4; after.memo.expanded = true; after.selectedDay = 'tomorrow'; after.itemsByDay.today[0].notified = true;
   commitView(doc, before, after); assert.equal(doc.revisions.length, count);
   const peer = fork(doc); peer.receipts = {}; peer.local = {};
   assert.equal(projectView(peer, s, '2026-10-20').itemsByDay.today[0].notified, false);
 });
-test('manual ordering is independent of content and survives a peer title edit', async () => {
-  const s = base(); s.itemsByDay.today = [task('a'), task('b'), task('c')]; const doc = await migrateSnapshot(s), peer = fork(doc);
+test('manual ordering is independent of content and survives a peer title edit', () => {
+  const s = base(); s.itemsByDay.today = [task('a'), task('b'), task('c')]; const doc = seedDoc(s), peer = fork(doc);
   setTaskOrder(doc, ['c', 'a', 'b'], 'c'); writeRevision(peer, 'task', 'c', payload('c', { title: 'edited' })); mergeRevisions(doc, peer.revisions);
   assert.deepEqual(projectView(doc, s, '2026-10-20').itemsByDay.today.map(t => t.id), ['c', 'a', 'b']); assert.equal(conflicts(doc).length, 0);
 });
@@ -96,8 +99,8 @@ test('same name categories converge and deletion clears stale offline references
   writeRevision(doc, 'projects', 'p1', { id: 'p1', name: 'work', color: '#abcdef' }, { deleted: true, now: 4 });
   view = projectView(doc, base(), '2026-10-20'); assert.equal(view.projects.length, 0); assert.equal(view.itemsByDay.today[0].projectId, null);
 });
-test('portable backup excludes device credentials/identity and imports as new versions', async () => {
-  const s = base(); s.itemsByDay.today = [task('a')]; const doc = await migrateSnapshot(s); doc.sync.url = 'https://private.example';
+test('portable backup excludes device credentials/identity and imports as new versions', () => {
+  const s = base(); s.itemsByDay.today = [task('a')]; const doc = seedDoc(s); doc.sync.url = 'https://private.example';
   const backup = exportDocument(doc, projectView(doc, s, '2026-10-20'));
   assert.equal(backup.schemaVersion, 3); assert.ok(!JSON.stringify(backup).includes('private.example'));
   const peer = newDocument(); writeRevision(peer, 'task', 'local', payload('local')); const id = peer.deviceId;
@@ -113,14 +116,8 @@ test('different colors for concurrent same-name categories remain recoverable an
   assert.equal(conflicts(doc).length, 0); assert.equal(projectView(doc, base()).projects[0].color, '#123456');
   mergeRevisions(peer, doc.revisions); assert.equal(conflicts(peer).length, 0); assert.equal(projectView(peer, base()).projects[0].color, '#123456');
 });
-test('undoing a migrated completed habit retains the previous streak after reload', async () => {
-  const s = base(); s.recurringItems = [task('daily', { completed: true, streak: 8, lastDone: '2026-10-20' })];
-  const doc = await migrateSnapshot(s); writeRevision(doc, 'completion', 'daily/2026-10-20', { taskId: 'daily', date: '2026-10-20', completed: false });
-  assert.equal(projectView(doc, s, '2026-10-20').recurringItems[0].streak, 7);
-  assert.equal(projectView(doc, s, '2026-10-21').recurringItems[0].streak, 0);
-});
-test('a new empty device does not create an empty memo conflict on first sync', async () => {
-  const doc = await migrateSnapshot(base()); const peer = newDocument(); writeRevision(peer, 'memo', 'main', { text: 'existing memo' });
+test('a new empty device does not create an empty memo conflict on first sync', () => {
+  const doc = seedDoc(base()); const peer = newDocument(); writeRevision(peer, 'memo', 'main', { text: 'existing memo' });
   mergeRevisions(doc, peer.revisions); assert.equal(conflicts(doc).length, 0); assert.equal(projectView(doc, base()).memo.text, 'existing memo');
 });
 test('identical concurrent edits do not become a spurious conflict after the next edit', () => {

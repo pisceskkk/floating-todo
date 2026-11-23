@@ -1,11 +1,14 @@
+#[cfg(desktop)]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager,
+    Emitter,
 };
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
-mod sync_storage;
+mod credential_store;
 mod lan;
+mod sync_storage;
 mod updates;
 
 #[cfg(target_os = "macos")]
@@ -15,6 +18,7 @@ mod macos_surface;
 mod windows_desktop;
 
 /// 显示或隐藏悬浮窗。
+#[cfg(desktop)]
 fn toggle_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -89,11 +93,16 @@ fn set_window_screen_position(window: tauri::WebviewWindow, x: i32, y: i32) -> R
         let hwnd = window.hwnd().map_err(|error| error.to_string())?;
         windows_desktop::set_screen_position(hwnd, x, y)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(desktop, not(target_os = "windows")))]
     {
         window
             .set_position(tauri::PhysicalPosition::new(x, y))
             .map_err(|error| error.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (window, x, y);
+        Ok(())
     }
 }
 
@@ -157,14 +166,14 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
-
-            // 全局快捷键：CmdOrCtrl+Shift+Space 唤起并聚焦输入框（快速捕获）。
             #[cfg(desktop)]
             {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+
+                // 全局快捷键：CmdOrCtrl+Shift+Space 唤起并聚焦输入框（快速捕获）。
                 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
                 let handle = app.handle().clone();
                 let _ = app.global_shortcut().on_shortcut(
@@ -179,57 +188,57 @@ pub fn run() {
                         }
                     },
                 );
+
+                let toggle_item =
+                    MenuItem::with_id(app, "toggle", "显示/隐藏小组件", true, None::<&str>)?;
+                #[cfg(target_os = "windows")]
+                let desktop_item =
+                    MenuItem::with_id(app, "desktop", "切换固定在桌面", true, None::<&str>)?;
+                let passthrough_item =
+                    MenuItem::with_id(app, "passthrough", "切换鼠标穿透", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                #[cfg(target_os = "windows")]
+                let menu = Menu::with_items(
+                    app,
+                    &[&toggle_item, &desktop_item, &passthrough_item, &quit_item],
+                )?;
+                #[cfg(not(target_os = "windows"))]
+                let menu = Menu::with_items(app, &[&toggle_item, &passthrough_item, &quit_item])?;
+
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("悬浮待办")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "toggle" => toggle_window(app),
+                        "passthrough" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.emit("toggle-passthrough", ());
+                            }
+                        }
+                        "desktop" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.emit("toggle-desktop-mode", ());
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            toggle_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
             }
-
-            let toggle_item =
-                MenuItem::with_id(app, "toggle", "显示/隐藏小组件", true, None::<&str>)?;
-            #[cfg(target_os = "windows")]
-            let desktop_item =
-                MenuItem::with_id(app, "desktop", "切换固定在桌面", true, None::<&str>)?;
-            let passthrough_item =
-                MenuItem::with_id(app, "passthrough", "切换鼠标穿透", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            #[cfg(target_os = "windows")]
-            let menu = Menu::with_items(
-                app,
-                &[&toggle_item, &desktop_item, &passthrough_item, &quit_item],
-            )?;
-            #[cfg(not(target_os = "windows"))]
-            let menu = Menu::with_items(app, &[&toggle_item, &passthrough_item, &quit_item])?;
-
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("悬浮待办")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "toggle" => toggle_window(app),
-                    "passthrough" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.emit("toggle-passthrough", ());
-                        }
-                    }
-                    "desktop" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.emit("toggle-desktop-mode", ());
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        toggle_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
 
             Ok(())
         })

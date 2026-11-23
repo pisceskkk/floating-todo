@@ -1,31 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeSnapshot, ensureCategory, updateCategory, categoryCount, removeCategory, parseClassification, resolveClassification, editText, activeToken, suggestions, matchesFilters, PALETTE } from '../src/classification.js';
+import { ensureCategory, updateCategory, categoryCount, removeCategory, parseClassification, resolveClassification, editText, activeToken, suggestions, matchesFilters, PALETTE } from '../src/classification.js';
 
-const base = () => ({ selectedDay: 'today', itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { opacity: .5 }, memo: { text: '' }, lastActiveDate: '2026-10-19' });
-const state = () => normalizeSnapshot(base(), base());
+const state = () => ({ selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 }, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], settings: { opacity: .5 }, memo: { text: '' }, lastActiveDate: '2026-10-19' });
 const task = (id, extra = {}) => ({ id, title: '旧任务', completed: false, time: '15:00', streak: 5, ...extra });
-
-test('legacy snapshots and backups preserve dates, reminders, habits and settings', () => {
-  const old = base(); old.itemsByDay.tomorrow.push(task('a')); old.recurringItems.push(task('b')); old.memo.text = '备忘录';
-  const before = JSON.stringify(old), s = normalizeSnapshot(old, base());
-  assert.equal(JSON.stringify(old), before);
-  assert.deepEqual(s.itemsByDay.tomorrow[0], task('a', { projectId: null, tagIds: [] }));
-  assert.equal(s.recurringItems[0].streak, 5); assert.equal(s.memo.text, '备忘录'); assert.equal(s.settings.opacity, .5);
-  assert.deepEqual(normalizeSnapshot(JSON.parse(JSON.stringify(s)), base()), s);
-});
-
-test('normalization aliases duplicate names, deduplicates tags and clears dangling references', () => {
-  const s = base();
-  s.projects = [{ id: 'p1', name: 'Work', color: '#123456' }, { id: 'p2', name: ' work ', color: 'bad' }];
-  s.tags = [{ id: 't1', name: '重要', color: '#112233' }, { id: 't2', name: '重要' }];
-  s.itemsByDay.today = [task('a', { projectId: 'p2', tagIds: ['t1', 't2', 'missing'] }), task('b', { projectId: 'missing' })];
-  const n = normalizeSnapshot(s, base());
-  assert.equal(n.projects.length, 1); assert.equal(n.itemsByDay.today[0].projectId, 'p1');
-  assert.deepEqual(n.itemsByDay.today[0].tagIds, ['t1']); assert.equal(n.itemsByDay.today[1].projectId, null);
-  assert.throws(() => normalizeSnapshot({ ...s, schemaVersion: 999 }, base()));
-  assert.throws(() => normalizeSnapshot({ ...s, itemsByDay: { today: {} } }, base()));
-});
 
 test('quick syntax strips metadata, last project wins and no provisional categories are created', () => {
   const s = state();

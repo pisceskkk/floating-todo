@@ -1,4 +1,4 @@
-// Versioned domain model. No network or UI dependencies.
+// Versioned domain model (v3). No network or UI dependencies.
 export const PROTOCOL_VERSION = 1;
 export const DAY_KEYS = ['today', 'tomorrow', 'dayAfterTomorrow'];
 const clone = value => structuredClone(value);
@@ -147,29 +147,8 @@ function viewEntities(view) {
     put('task', task.id, taskPayload(task, 'daily', null));
     put('completion', `${task.id}/${base}`, { taskId: task.id, date: base, completed: !!task.completed });
   }
-  put('memo', 'main', { text: view.memo.text });
+  if (view.memo.text || view.memo.persisted) put('memo', 'main', { text: view.memo.text });
   return map;
-}
-export async function migrateSnapshot(view) {
-  const doc = newDocument(); doc.local = localFromView(view);
-  const migrated = clone(view);
-  for (const task of migrated.recurringItems) if (task.lastDone && task.streak > 0) task.legacyStreak = { date: isoDate(task.lastDone), count: task.streak };
-  const entities = viewEntities(migrated);
-  // A stable baseline deduplicates copies of the same pre-sync backup.
-  for (const { type, id, payload } of entities.values()) {
-    if (type === 'memo' && !payload.text) continue;
-    const revisionId = 'migration-' + await digest({ type, id, payload });
-    doc.revisions.push({ revisionId, entityType: type, entityId: id, parentRevisionIds: [], deviceId: 'migration', modifiedAt: 0, logicalCounter: 0, deleted: false, payload });
-    doc.outbox.push(revisionId);
-  }
-  for (const [groupIndex, list] of [...DAY_KEYS.map(day => migrated.itemsByDay[day]), migrated.recurringItems].entries()) {
-    for (const [position, task] of list.entries()) {
-      const payload = { position: position + (2 - groupIndex) * 1000000 };
-      const revisionId = 'migration-' + await digest({ type: 'order', id: task.id, payload });
-      doc.revisions.push({ revisionId, entityType: 'order', entityId: task.id, parentRevisionIds: [], deviceId: 'migration', modifiedAt: 0, logicalCounter: 0, deleted: false, payload }); doc.outbox.push(revisionId);
-    }
-  }
-  return doc;
 }
 function localFromView(view) {
   return { settings: clone(view.settings), selectedDay: view.selectedDay, memoExpanded: view.memo.expanded, colorCounters: clone(view.colorCounters) };
@@ -194,16 +173,18 @@ export function setTaskOrder(doc, ids, movedId) {
   const index = ids.indexOf(movedId); if (index < 0) return;
   const left = index ? pos(ids[index - 1]) : null, right = index < ids.length - 1 ? pos(ids[index + 1]) : null;
   const value = left === null ? (right ?? 0) - 1 : right === null ? left + 1 : (left + right) / 2;
-  if ((left !== null && value <= left) || (right !== null && value >= right)) {
+  const misordered = ids.some((id, i) => i > 0 && (id === movedId ? value : pos(id)) <= (ids[i - 1] === movedId ? value : pos(ids[i - 1])));
+  if (misordered || (left !== null && value <= left) || (right !== null && value >= right)) {
     ids.forEach((id, i) => writeRevision(doc, 'order', id, { position: i }));
   } else writeRevision(doc, 'order', movedId, { position: value });
 }
 export function projectView(doc, base, today = dateInZone(doc.sync.timeZone)) {
   const view = clone(base), current = currentEntities(doc);
-  Object.assign(view, { schemaVersion: 2, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], projects: [], tags: [], lastActiveDate: today });
+  Object.assign(view, { schemaVersion: 3, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], projects: [], tags: [], lastActiveDate: today });
   if (doc.local.settings) view.settings = { ...view.settings, ...clone(doc.local.settings) };
   view.selectedDay = doc.local.selectedDay || view.selectedDay;
-  view.memo = { text: current.get('memo:main')?.payload.text || '', expanded: !!doc.local.memoExpanded };
+  const memoEntity = current.get('memo:main');
+  view.memo = { text: memoEntity?.payload.text || '', expanded: !!doc.local.memoExpanded, persisted: !!memoEntity };
   const identityAliases = categoryAliases(doc);
   const aliases = new Map([...identityAliases].map(([key, value]) => [key, value.slice(value.indexOf(':') + 1)]));
   for (const kind of ['projects', 'tags']) {
@@ -258,7 +239,9 @@ export function resolveConflict(doc, key, revision, payload = revision.payload) 
   return writeRevision(doc, revision.entityType, revision.entityId, payload, { deleted: revision.deleted, resolve: true });
 }
 export function exportDocument(doc, view) {
-  return { ...clone(view), schemaVersion: 3, syncData: { protocolVersion: 1, revisions: clone(doc.revisions), timeZone: doc.sync.timeZone } };
+  const exported = clone(view);
+  delete exported.memo?.persisted;
+  return { ...exported, schemaVersion: 3, syncData: { protocolVersion: 1, revisions: clone(doc.revisions), timeZone: doc.sync.timeZone } };
 }
 export function importRevisionsAsEdits(doc, revisions) {
   const source = newDocument(); mergeRevisions(source, revisions);

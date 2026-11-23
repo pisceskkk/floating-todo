@@ -1,21 +1,45 @@
 import { test, expect } from '@playwright/test';
-const KEY = 'floating-todo/snapshot';
-const item = (id, extra = {}) => ({ id, title: '任务 ' + id, detail: '', time: null, completed: false, projectId: 'p', tagIds: ['t'], ...extra });
+import { newDocument, commitView, projectView, dateInZone } from '../src/sync-model.js';
+
+const CACHE_KEY = 'floating-todo/v3-preview';
+const item = (id, extra = {}) => ({ id, title: '任务 ' + id, detail: '', time: null, completed: false, createdAt: 1, projectId: 'p', tagIds: ['t'], ...extra });
+const baseView = () => ({
+  schemaVersion: 3, selectedDay: 'today', projects: [], tags: [], colorCounters: { projects: 0, tags: 0 },
+  itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [],
+  settings: { memoEnabled: false }, memo: { text: '', expanded: false }, lastActiveDate: dateInZone(),
+});
+
+function buildDoc(lists = {}) {
+  const doc = newDocument();
+  const base = baseView();
+  const view = {
+    ...base,
+    itemsByDay: { today: lists.today || [], tomorrow: lists.tomorrow || [], dayAfterTomorrow: lists.dayAfterTomorrow || [] },
+    recurringItems: lists.recurring || [],
+    projects: [{ id: 'p', name: '工作', color: '#397fe5' }, { id: 'hidden', name: '生活', color: '#4a9b74' }],
+    tags: [{ id: 't', name: '重要', color: '#ae65d6' }],
+  };
+  commitView(doc, base, view);
+  for (const [groupIndex, list] of [view.itemsByDay.today, view.itemsByDay.tomorrow, view.itemsByDay.dayAfterTomorrow, view.recurringItems].entries()) {
+    list.forEach((t, i) => {
+      const r = doc.revisions.find(rev => rev.entityType === 'order' && rev.entityId === t.id);
+      if (r) r.payload.position = i + (2 - groupIndex) * 1000000;
+    });
+  }
+  return doc;
+}
+
 async function boot(page, lists = {}) {
-  await page.addInitScript(({ key, lists }) => {
-    if (localStorage.getItem(key)) return;
-    const d = new Date();
-    localStorage.setItem(key, JSON.stringify({
-      itemsByDay: { today: lists.today || [], tomorrow: lists.tomorrow || [], dayAfterTomorrow: lists.dayAfterTomorrow || [] },
-      recurringItems: lists.recurring || [], selectedDay: 'today',
-      lastActiveDate: `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`,
-      projects: [{ id: 'p', name: '工作', color: '#397fe5' }, { id: 'hidden', name: '生活', color: '#4a9b74' }],
-      tags: [{ id: 't', name: '重要', color: '#ae65d6' }], settings: { memoEnabled: false },
-    }));
-  }, { key: KEY, lists });
+  const rawDoc = JSON.stringify(buildDoc(lists));
+  await page.addInitScript(({ key, rawDoc }) => {
+    if (!localStorage.getItem(key)) localStorage.setItem(key, rawDoc);
+  }, { key: CACHE_KEY, rawDoc });
   await page.goto('/'); await expect(page.locator('#main-input')).toBeVisible();
 }
-const read = page => page.evaluate(key => JSON.parse(localStorage.getItem(key)), KEY);
+async function read(page) {
+  const raw = await page.evaluate(key => localStorage.getItem(key), CACHE_KEY);
+  return projectView(JSON.parse(raw), baseView());
+}
 const order = (page, list = '.list') => page.locator(`${list} > .row`).evaluateAll(rows => rows.map(row => row.dataset.row));
 async function drag(page, id, targetId, { list = '.list', title = false, drop = true } = {}) {
   const source = await page.locator(`${list} > [data-row="${id}"] ${title ? '.title' : '.drag-handle'}`).boundingBox();

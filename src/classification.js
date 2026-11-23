@@ -1,69 +1,14 @@
-// Shared by local loading, backup import, quick capture and classification settings.
-export const SCHEMA_VERSION = 2;
+// Shared by v3 view projection, quick capture and classification settings.
+export const SCHEMA_VERSION = 3;
 export const PALETTE = ["#397fe5", "#ae65d6", "#d7628e", "#da8740", "#4a9b74", "#399cac", "#8675d4", "#b29a38"];
 export const DAY_KEYS = ["today", "tomorrow", "dayAfterTomorrow"];
 export const nameKey = (name) => String(name ?? "").trim().normalize("NFKC").toLowerCase();
 export const validColor = (color) => /^#[0-9a-f]{6}$/i.test(color);
 const newId = () => crypto.randomUUID();
 const cleanName = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
-const record = (value) => value && typeof value === "object" && !Array.isArray(value);
 
 export function allTasks(state) {
   return [...DAY_KEYS.flatMap((day) => state.itemsByDay[day]), ...state.recurringItems];
-}
-
-export function normalizeSnapshot(raw, base) {
-  if (!record(raw) || !record(raw.itemsByDay)) throw new Error("备份缺少任务数据");
-  if (Number(raw.schemaVersion) > SCHEMA_VERSION) throw new Error("此备份来自更新版本，请先更新应用");
-  const aliases = { projects: new Map(), tags: new Map() };
-  const catalogs = {};
-  const counters = {};
-  for (const kind of ["projects", "tags"]) {
-    const names = new Map();
-    const ids = new Set();
-    const entries = raw[kind] ?? [];
-    if (!Array.isArray(entries)) throw new Error("分类数据格式不正确");
-    catalogs[kind] = [];
-    for (const entry of entries) {
-      if (!record(entry)) continue;
-      const name = cleanName(entry.name);
-      if (!name) continue;
-      const key = nameKey(name);
-      let canonical = names.get(key);
-      if (!canonical) {
-        const id = typeof entry.id === "string" && entry.id && !ids.has(entry.id) ? entry.id : newId();
-        canonical = { id, name, color: validColor(entry.color) ? entry.color : PALETTE[catalogs[kind].length % PALETTE.length] };
-        catalogs[kind].push(canonical);
-        names.set(key, canonical);
-        ids.add(id);
-      }
-      if (typeof entry.id === "string" && !aliases[kind].has(entry.id)) aliases[kind].set(entry.id, canonical.id);
-    }
-    const saved = raw.colorCounters?.[kind];
-    counters[kind] = Number.isSafeInteger(saved) && saved >= catalogs[kind].length ? saved : catalogs[kind].length;
-  }
-  const normalizeTasks = (list) => {
-    if (!Array.isArray(list)) throw new Error("任务列表格式不正确");
-    return list.map((task) => {
-      if (!record(task) || typeof task.title !== "string" || typeof task.id !== "string") throw new Error("任务数据格式不正确");
-      return {
-        ...task,
-        projectId: aliases.projects.get(task.projectId) ?? null,
-        tagIds: [...new Set((Array.isArray(task.tagIds) ? task.tagIds : []).map((id) => aliases.tags.get(id)).filter(Boolean))],
-      };
-    });
-  };
-  return {
-    ...base, ...raw, ...catalogs,
-    schemaVersion: SCHEMA_VERSION,
-    colorCounters: counters,
-    selectedDay: DAY_KEYS.includes(raw.selectedDay) ? raw.selectedDay : "today",
-    itemsByDay: Object.fromEntries(DAY_KEYS.map((day) => [day, normalizeTasks(raw.itemsByDay[day] ?? [])])),
-    recurringItems: normalizeTasks(raw.recurringItems ?? []),
-    settings: { ...base.settings, ...(record(raw.settings) ? raw.settings : {}) },
-    memo: { ...base.memo, ...(record(raw.memo) ? raw.memo : {}) },
-    lastActiveDate: raw.lastActiveDate || base.lastActiveDate,
-  };
 }
 
 export function ensureCategory(state, kind, value) {

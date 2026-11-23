@@ -1632,12 +1632,22 @@ html[data-surface="flat"] .menu {
   margin: 3px 6px;
 }
 
-/* ---------- 紧凑模式放大按钮 ---------- */
+/* ---------- 紧凑模式顶部栏 ---------- */
+.compact-topbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.compact-topbar .filter-bar {
+  flex: 1;
+  min-width: 0;
+}
+
 .expand-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 40;
+  flex-shrink: 0;
 }
 
 /* ---------- 缩放手柄 ---------- */
@@ -2186,23 +2196,90 @@ textarea:focus-visible {
 }
 
 .compact .filter-bar {
-  padding-right: 28px;
   gap: 4px;
 }
 
 .compact .filter-chip {
-  height: auto;
-  padding: 3px 5px;
-  font-size: 10px;
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  gap: 3px;
 }
 
-.compact .category-panel {
-  margin-top: 12px;
-  max-height: calc(100% - 24px);
+.compact .filter-clear {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.compact .row {
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.compact .check {
+  width: 16px;
+  height: 16px;
 }
 
 .compact .task-categories {
-  margin-top: 1px;
+  margin-top: 0;
+  padding: 2px 3px;
+  gap: 3.5px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.compact .drag-handle {
+  width: 14px;
+  min-height: 20px;
+}
+
+.compact .settings,
+.compact .category-panel {
+  margin-top: 8px;
+  width: calc(100% - 14px);
+  max-width: calc(100% - 14px);
+  max-height: calc(100% - 16px);
+  padding: 10px;
+  gap: 8px;
+}
+
+.compact .sheet-header h2,
+.compact .category-header h2 {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 移动端全屏与安全区域适配 ---------- */
+html.platform-mobile {
+  --panel-inset: 0px;
+  --panel-radius: 0px;
+}
+
+html.platform-mobile .panel {
+  inset: 0;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+html.platform-mobile .overlay {
+  inset: 0;
+  border-radius: 0;
+}
+
+html.platform-mobile .resize {
+  display: none;
 }
 
 @media (max-height: 420px) {

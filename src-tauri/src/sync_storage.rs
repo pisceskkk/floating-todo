@@ -22,7 +22,7 @@ fn initialize_connection(db: &Connection) -> Result<(), String> {
       CREATE TABLE IF NOT EXISTS document (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, entity_key TEXT NOT NULL, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS outbox (revision_id TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS migration_backup (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);")
+      DROP TABLE IF EXISTS migration_backup;")
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -40,11 +40,10 @@ pub fn storage_load(app: AppHandle) -> Result<Option<String>, String> {
 pub fn storage_save(
     app: AppHandle,
     json: String,
-    legacy: Option<String>,
     expected_generation: u64,
 ) -> Result<u64, String> {
     let mut db = connection(&app)?;
-    let generation = save_document(&mut db, &json, legacy, expected_generation)?;
+    let generation = save_document(&mut db, &json, expected_generation)?;
     crate::lan::publish(&app, &json);
     Ok(generation)
 }
@@ -52,7 +51,6 @@ pub fn storage_save(
 fn save_document(
     db: &mut Connection,
     json: &str,
-    legacy: Option<String>,
     expected_generation: u64,
 ) -> Result<u64, String> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -105,13 +103,6 @@ fn save_document(
         )
         .map_err(|e| e.to_string())?;
     }
-    if let Some(raw) = legacy {
-        tx.execute(
-            "INSERT OR IGNORE INTO migration_backup(id,json) VALUES(1,?1)",
-            [raw],
-        )
-        .map_err(|e| e.to_string())?;
-    }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(generation + 1)
 }
@@ -143,19 +134,17 @@ fn base_url(config: &DavConfig) -> Result<reqwest::Url, String> {
     }
     Ok(url)
 }
-fn credential(config: &DavConfig) -> Result<keyring::Entry, String> {
+fn credential_key(config: &DavConfig) -> Result<String, String> {
     let base = base_url(config)?;
-    let key = format!(
+    Ok(format!(
         "{:x}",
         Sha256::digest(format!("{}\n{}", base, config.username).as_bytes())
-    );
-    keyring::Entry::new("com.gaopengfei.floating-todo.webdav", &key)
-        .map_err(|e| format!("无法访问系统凭据存储：{e}"))
+    ))
 }
 #[tauri::command]
-pub fn sync_set_password(config: DavConfig, password: String) -> Result<(), String> {
-    credential(&config)?
-        .set_password(&password)
+pub fn sync_set_password(app: AppHandle, config: DavConfig, password: String) -> Result<(), String> {
+    let key = credential_key(&config)?;
+    crate::credential_store::set_password(&app, "com.gaopengfei.floating-todo.webdav", &key, &password)
         .map_err(|e| format!("无法保存 WebDAV 密码：{e}"))
 }
 #[derive(Serialize)]
@@ -216,14 +205,15 @@ fn list_entries(
 
 #[tauri::command]
 pub async fn dav_request(
+    app: AppHandle,
     config: DavConfig,
     path: String,
     method: String,
     body: Option<String>,
     etag: Option<String>,
 ) -> Result<DavResponse, String> {
-    let password = credential(&config)?
-        .get_password()
+    let key = credential_key(&config)?;
+    let password = crate::credential_store::get_password(&app, "com.gaopengfei.floating-todo.webdav", &key)
         .map_err(|_| "无法读取 WebDAV 密码，请重新保存连接设置")?;
     request_with_password(config, path, method, body, etag, password).await
 }
@@ -334,12 +324,12 @@ mod tests {
         initialize_connection(&db).unwrap();
         let valid = serde_json::json!({"schemaVersion":3,"revisions":[{"revisionId":"r1","entityType":"task","entityId":"a"}],"outbox":["r1"]}).to_string();
         assert_eq!(
-            save_document(&mut db, &valid, Some("legacy".into()), 0).unwrap(),
+            save_document(&mut db, &valid, 0).unwrap(),
             1
         );
         let invalid =
             serde_json::json!({"schemaVersion":3,"revisions":[],"outbox":[123]}).to_string();
-        assert!(save_document(&mut db, &invalid, None, 1).is_err());
+        assert!(save_document(&mut db, &invalid, 1).is_err());
         let stored: String = db
             .query_row("SELECT json FROM document WHERE id=1", [], |r| r.get(0))
             .unwrap();
@@ -353,16 +343,10 @@ mod tests {
                 .unwrap(),
             "r1"
         );
-        assert!(save_document(&mut db, &valid, None, 0).is_err());
+        assert!(save_document(&mut db, &valid, 0).is_err());
         assert_eq!(
-            save_document(&mut db, &valid, Some("replacement".into()), 1).unwrap(),
+            save_document(&mut db, &valid, 1).unwrap(),
             2
-        );
-        assert_eq!(
-            db.query_row("SELECT json FROM migration_backup", [], |r| r
-                .get::<_, String>(0))
-                .unwrap(),
-            "legacy"
         );
     }
 
