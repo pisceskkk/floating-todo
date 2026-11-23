@@ -75,17 +75,180 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  release-android:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and Build Tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;27.2.12479018" "build-tools;35.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Install Rust Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Initialize Android project and network permissions
+        run: |
+          npm run tauri -- android init --ci
+          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          python3 -c '
+          from pathlib import Path
+          p = Path("'"$MANIFEST"'")
+          text = p.read_text(encoding="utf-8")
+          needle = "<uses-permission android:name=\"android.permission.INTERNET\" />"
+          extra = "\n    <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\" />\n    <uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\" />\n    <uses-permission android:name=\"android.permission.CHANGE_WIFI_MULTICAST_STATE\" />"
+          if "ACCESS_NETWORK_STATE" not in text and needle in text:
+              p.write_text(text.replace(needle, needle + extra, 1), encoding="utf-8")
+          '
+
+      - name: Build Android ARM64 APK
+        run: npm run tauri -- android build --apk --target aarch64
+
+      - name: Sign and stage Android APK
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist-mobile
+          RAW_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          test -n "$RAW_APK"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          ALIGNED="dist-mobile/aligned.apk"
+          OUT_APK="dist-mobile/floating-todo_${TAG}_android-arm64.apk"
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$RAW_APK" "$ALIGNED"
+          keytool -genkeypair -v \
+            -keystore dist-mobile/release.keystore \
+            -alias floating-todo \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=floating-todo,OU=Release,O=floating-todo,L=Local,ST=Local,C=CN"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks dist-mobile/release.keystore \
+            --ks-key-alias floating-todo \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$OUT_APK" "$ALIGNED"
+          rm -f "$ALIGNED" dist-mobile/release.keystore dist-mobile/*.idsig
+          ls -lh "$OUT_APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: dist-mobile/*.apk
+          retention-days: 7
+
+  release-ios:
+    needs: tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust iOS target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Initialize iOS project
+        run: |
+          npm run tauri -- ios init --ci
+          PLIST=$(find src-tauri/gen/apple -maxdepth 2 -name "Info.plist" | head -n 1)
+          if [ -n "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 用于发现并同步局域网内的待办设备" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _floatingtodo._tcp" "$PLIST" 2>/dev/null || true
+          fi
+
+      - name: Build unsigned iOS IPA
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PROJ=$(find src-tauri/gen/apple -maxdepth 1 -name "*.xcodeproj" | head -n 1)
+          test -n "$PROJ"
+          SCHEME=$(xcodebuild -project "$PROJ" -list -json | python3 -c 'import json,sys; s=json.load(sys.stdin)["project"]["schemes"]; print(next((x for x in s if "iOS" in x), s[0]))')
+          echo "Building project=$PROJ scheme=$SCHEME"
+          xcodebuild \
+            -project "$PROJ" \
+            -scheme "$SCHEME" \
+            -configuration release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CONFIGURATION_BUILD_DIR="$PWD/build-ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+          APP_DIR=$(find "$PWD/build-ios" -maxdepth 1 -name "*.app" | head -n 1)
+          test -n "$APP_DIR"
+          mkdir -p dist-mobile Payload
+          cp -R "$APP_DIR" Payload/
+          OUT_IPA="$PWD/dist-mobile/floating-todo_${TAG}_ios-unsigned.ipa"
+          zip -qr "$OUT_IPA" Payload
+          rm -rf Payload
+          ls -lh "$OUT_IPA"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-release
+          path: dist-mobile/*.ipa
+          retention-days: 7
+
   publish:
-    needs: release
+    needs: [release, release-android, release-ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Normalize installer filenames and publish
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release
+          path: mobile-assets
+        continue-on-error: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-release
+          path: mobile-assets
+        continue-on-error: true
+
+      - name: Upload mobile packages, normalize installer filenames and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ github.ref_name }}"
+          for f in mobile-assets/*.apk mobile-assets/*.ipa; do
+            [ -f "$f" ] && gh release upload "$tag" "$f" --repo "${{ github.repository }}" --clobber
+          done
           gh api "repos/${{ github.repository }}/releases/tags/$tag" \
             --jq '.assets[] | "\(.id) \(.name)"' | while read -r id name; do
             case "$name" in
