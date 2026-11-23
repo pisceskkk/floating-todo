@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "floating-todo"
-version = "0.4.2-rc3"
+version = "0.4.2-rc4"
 dependencies = [
  "floating-todo-lan",
  "keyring",
