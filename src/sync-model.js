@@ -201,7 +201,7 @@ export function setTaskOrder(doc, ids, movedId) {
 export function projectView(doc, base, today = dateInZone(doc.sync.timeZone)) {
   const view = clone(base), current = currentEntities(doc);
   Object.assign(view, { schemaVersion: 2, itemsByDay: { today: [], tomorrow: [], dayAfterTomorrow: [] }, recurringItems: [], projects: [], tags: [], lastActiveDate: today });
-  if (doc.local.settings) view.settings = clone(doc.local.settings);
+  if (doc.local.settings) view.settings = { ...view.settings, ...clone(doc.local.settings) };
   view.selectedDay = doc.local.selectedDay || view.selectedDay;
   view.memo = { text: current.get('memo:main')?.payload.text || '', expanded: !!doc.local.memoExpanded };
   const identityAliases = categoryAliases(doc);

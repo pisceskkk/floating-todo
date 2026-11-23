@@ -1,22 +1,25 @@
 import { conflicts, resolveConflict, writeRevision } from './sync-model.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const typeName = { task: '待办', projects: '项目', tags: '标签', memo: '备忘录', completion: '打卡', order: '排序' };
-function panel(title) {
+function panel(title, onBack = null) {
   const overlay = document.createElement('div'); overlay.className = 'overlay sync-overlay';
-  overlay.innerHTML = `<div class="settings sync-settings"><h2>${esc(title)}</h2><div data-sync-body></div><button type="button" class="link-btn" data-sync-close>关闭</button></div>`;
-  overlay.addEventListener('click', e => { if (e.target === overlay || e.target.closest('[data-sync-close]')) overlay.remove(); });
+  overlay.innerHTML = `<div class="settings sync-settings"><div class="sheet-header">${onBack ? '<button type="button" class="icon-btn sm" data-sync-back aria-label="返回设置">‹</button>' : ''}<h2>${esc(title)}</h2><button type="button" class="icon-btn sm" data-sync-close aria-label="关闭">×</button></div><div data-sync-body></div></div>`;
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay || e.target.closest('[data-sync-close]')) { overlay.remove(); return; }
+    if (onBack && e.target.closest('[data-sync-back]')) { overlay.remove(); onBack(); }
+  });
   document.body.append(overlay); return overlay;
 }
 function message(overlay, text, error = false) { const element = overlay.querySelector('[data-sync-message]'); element.textContent = text; element.classList.toggle('sync-error', error); }
-export function openSyncSettings(store) {
-  const overlay = panel('WebDAV 同步'), s = store.doc.sync;
+export function openSyncSettings(store, onBack = null) {
+  const overlay = panel('WebDAV 同步', onBack), s = store.doc.sync;
   overlay.querySelector('[data-sync-body]').innerHTML = `
     <p class="sync-help">本地保存，联网后合并。两台设备填写相同的地址和空间名称。时区：Asia/Shanghai。</p>
     <label class="sync-field">WebDAV 地址<input type="url" data-sync-url placeholder="https://服务器/dav/" value="${esc(s.url)}" autocomplete="off"></label>
     <label class="sync-field">用户名<input data-sync-user value="${esc(s.username)}" autocomplete="username"></label>
     <label class="sync-field">密码／应用专用密码<input data-sync-password type="password" placeholder="留空保留已保存密码" autocomplete="new-password"></label>
     <label class="sync-field">同步空间<input data-sync-space value="${esc(s.spaceId)}" maxlength="80"></label>
-    <label class="sync-check"><input data-sync-enabled type="checkbox" ${s.enabled ? 'checked' : ''}>自动同步</label>
+    <label class="sync-check"><span>自动同步</span><input class="toggle-switch" data-sync-enabled type="checkbox" ${s.enabled ? 'checked' : ''}></label>
     <p class="sync-help">密码保存到系统凭据存储。远端 JSON 未加密，服务端可以读取内容。更换空间会合并本机数据与目标空间数据。</p>
     <div class="sync-actions"><button class="data-btn" data-sync-save>保存设置</button><button class="data-btn" data-sync-test>测试连接</button><button class="data-btn" data-sync-now>立即同步</button></div>
     <p class="sync-status" data-sync-status role="status"></p><p class="sync-error" data-sync-message role="alert"></p>

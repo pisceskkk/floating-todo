@@ -14,6 +14,7 @@ let memoSaveTimer = null;
 const TAURI = window.__TAURI__;
 const appWindow = TAURI?.window?.getCurrentWindow?.();
 const isWindows = /Windows/i.test(navigator.userAgent);
+const defaultSurfaceStyle = () => (isWindows ? "flat" : "glass");
 
 async function openExternal(url) {
   try {
@@ -101,6 +102,7 @@ function defaultState() {
       customBg: null,
       memoEnabled: false,
       clickThrough: false,
+      surfaceStyle: defaultSurfaceStyle(),
       shadowEnabled: true,
     },
     memo: { text: "", expanded: false },
@@ -341,6 +343,43 @@ let activeMenu = null; // { id, day, kind }
 let appliedWindowMode = null;
 let pendingWindowMode = null;
 let windowModeTask = Promise.resolve();
+let lastNativeSurfaceKey = null;
+
+function resolvedSurfaceStyle() {
+  const value = state.settings.surfaceStyle;
+  return value === "flat" || value === "glass" ? value : defaultSurfaceStyle();
+}
+
+function syncNativeSurface(surface) {
+  const root = document.documentElement;
+  if (!window.__TAURI_INTERNALS__ || !TAURI?.core?.invoke) {
+    root.dataset.nativeGlass = "off";
+    return;
+  }
+  // Wait for window bounds to settle during mode transitions before sizing NSVisualEffectView.
+  if (windowUI.transitioning) return;
+  const mode = windowUI.mode;
+  const supportsNativeGlass = mode === "panel" || mode === "mini";
+  const vibrancy = surface === "glass" && supportsNativeGlass;
+  const radius = mode === "mini" ? 22 : 24;
+  const inset = 12;
+  const theme = state.settings.appearance || "system";
+  const key = `${vibrancy}|${theme}|${mode}|${radius}|${inset}`;
+  if (lastNativeSurfaceKey === key) return;
+  lastNativeSurfaceKey = key;
+  TAURI.core
+    .invoke("set_window_surface", { vibrancy, theme, radius, inset })
+    .then((applied) => {
+      if (lastNativeSurfaceKey === key) {
+        root.dataset.nativeGlass = applied ? "on" : "off";
+      }
+    })
+    .catch(() => {
+      if (lastNativeSurfaceKey === key) {
+        root.dataset.nativeGlass = "off";
+      }
+    });
+}
 
 function applyWindowMode() {
   if (!appWindow) return;
@@ -383,8 +422,10 @@ function applyWindowMode() {
 
 function applyWindowChrome() {
   const root = document.documentElement;
+  const surface = resolvedSurfaceStyle();
   root.dataset.theme = state.settings.appearance;
-  root.dataset.shadow = state.settings.shadowEnabled ? "on" : "off";
+  root.dataset.surface = surface;
+  root.dataset.shadow = state.settings.shadowEnabled !== false ? "on" : "off";
   root.style.setProperty("--opacity", state.settings.opacity);
   if (state.settings.customBg) {
     root.style.setProperty("--panel-top", state.settings.customBg);
@@ -393,6 +434,7 @@ function applyWindowChrome() {
     root.style.removeProperty("--panel-top");
     root.style.removeProperty("--panel-bottom");
   }
+  syncNativeSurface(surface);
   if (appWindow) {
     appWindow.setIgnoreCursorEvents(!!state.settings.clickThrough).catch(() => {});
   }
@@ -1023,15 +1065,18 @@ function openDetailEditor(id, day) {
   if (!it) return;
   const overlay = document.createElement("div");
   overlay.className = "overlay";
-  overlay.innerHTML = `<div class="settings" style="margin-top:40px;gap:12px">
-    <h2>${DAY_TITLE[day]}待办详情</h2>
-    <div><div style="font-size:11px;color:var(--text-secondary);margin-bottom:5px">标题</div>
+  overlay.innerHTML = `<div class="settings">
+    <div class="sheet-header">
+      <h2>${DAY_TITLE[day]}待办详情</h2>
+      <button type="button" class="icon-btn sm" data-de="cancel" aria-label="关闭">×</button>
+    </div>
+    <div><div class="settings-field-label">标题</div>
     <div class="composer sm"><input id="de-title" value="${esc(it.title)}"/></div></div>
-    <div><div style="font-size:11px;color:var(--text-secondary);margin-bottom:5px">描述</div>
+    <div><div class="settings-field-label">描述</div>
     <div class="memo"><textarea id="de-detail" style="border-top:none">${esc(it.detail)}</textarea></div></div>
     ${classificationUI.metadataFields(it)}
     <div class="set-row"><button class="link-btn" data-de="cancel">取消</button>
-    <button class="link-btn" style="color:var(--accent);font-weight:600" data-de="save">保存详情</button></div>
+    <button class="link-btn primary" data-de="save">保存详情</button></div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener("click", (e) => {
@@ -1062,9 +1107,13 @@ function openSettings() {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   const s = state.settings;
+  const surface = resolvedSurfaceStyle();
   const bgHex = s.customBg ? rgbToHex(s.customBg) : "#dceaff";
   overlay.innerHTML = `<div class="settings">
-    <h2>小组件设置</h2>
+    <div class="sheet-header">
+      <h2>小组件设置</h2>
+      <button type="button" class="icon-btn sm" data-s="close" aria-label="关闭">×</button>
+    </div>
     <section class="settings-group" aria-labelledby="settings-window-title">
       <h3 id="settings-window-title">窗口与行为</h3>
       <div class="set-row"><span>始终置顶</span><div class="switch ${s.alwaysOnTop ? "on" : ""}" data-s="alwaysOnTop"></div></div>
@@ -1076,24 +1125,31 @@ function openSettings() {
     <section class="settings-group" aria-labelledby="settings-appearance-title">
       <h3 id="settings-appearance-title">外观</h3>
       <div>
-        <div style="font-size:13px;font-weight:500;margin-bottom:6px">主题</div>
-        <div class="seg-control">
-          <button class="${s.appearance === "system" ? "on" : ""}" data-ap="system">跟随系统</button>
-          <button class="${s.appearance === "light" ? "on" : ""}" data-ap="light">浅色</button>
-          <button class="${s.appearance === "dark" ? "on" : ""}" data-ap="dark">深色</button>
-        </div>
-      </div>
-      <div class="set-row"><span>背景色</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input type="color" id="bg-color" value="${bgHex}"/>
-          <button class="link-btn" data-s="resetBg" ${s.customBg ? "" : 'style="opacity:.45"'}>恢复默认</button>
+        <div class="settings-field-label">界面样式</div>
+        <div class="seg-control" role="group" aria-label="界面样式">
+          <button type="button" class="${surface === "glass" ? "on" : ""}" data-surface="glass">毛玻璃</button>
+          <button type="button" class="${surface === "flat" ? "on" : ""}" data-surface="flat">平面阴影</button>
         </div>
       </div>
       <div>
-        <div class="set-row"><span>透明度</span><span style="color:var(--text-secondary)">${Math.round(s.opacity * 100)}%</span></div>
+        <div class="settings-field-label">主题</div>
+        <div class="seg-control">
+          <button type="button" class="${s.appearance === "system" ? "on" : ""}" data-ap="system">跟随系统</button>
+          <button type="button" class="${s.appearance === "light" ? "on" : ""}" data-ap="light">浅色</button>
+          <button type="button" class="${s.appearance === "dark" ? "on" : ""}" data-ap="dark">深色</button>
+        </div>
+      </div>
+      <div class="set-row"><span>背景色</span>
+        <div class="set-row-actions">
+          <input type="color" id="bg-color" value="${bgHex}"/>
+          <button type="button" class="link-btn ${s.customBg ? "" : "muted"}" data-s="resetBg">恢复默认</button>
+        </div>
+      </div>
+      <div>
+        <div class="set-row"><span>透明度</span><span class="set-muted">${Math.round(s.opacity * 100)}%</span></div>
         <input type="range" id="op-range" min="0.2" max="0.95" step="0.01" value="${s.opacity}"/>
       </div>
-      <div class="set-row"><span>窗口阴影</span><button type="button" class="switch ${s.shadowEnabled ? "on" : ""}" data-s="shadowEnabled" role="switch" aria-checked="${!!s.shadowEnabled}" aria-label="窗口阴影"></button></div>
+      <div class="set-row" data-shadow-row ${surface === "flat" ? "" : "hidden"}><span>窗口阴影</span><button type="button" class="switch ${s.shadowEnabled !== false ? "on" : ""}" data-s="shadowEnabled" role="switch" aria-checked="${s.shadowEnabled !== false}" aria-label="窗口阴影"></button></div>
     </section>
     <section class="settings-group" aria-labelledby="settings-categories-title">
       <h3 id="settings-categories-title">分类</h3>
@@ -1103,7 +1159,7 @@ function openSettings() {
       <h3 id="settings-sync-title">同步与备份</h3>
       <button class="data-btn" data-s="lan"><span>局域网与 Tailscale 同步</span><span aria-hidden="true">›</span></button>
       <button class="data-btn" data-s="sync"><span>WebDAV 同步与冲突</span><span aria-hidden="true">›</span></button>
-      <div class="set-row" style="gap:8px">
+      <div class="set-row">
         <button class="data-btn" data-s="export">${ICONS.download}<span>导出备份</span></button>
         <button class="data-btn" data-s="import">${ICONS.upload}<span>导入备份</span></button>
       </div>
@@ -1113,13 +1169,12 @@ function openSettings() {
       <h3 id="settings-notifications-title">通知</h3>
       <div class="set-row"><span>本机到点提醒</span><button class="switch ${s.remindersEnabled !== false ? "on" : ""}" data-s="remindersEnabled" aria-label="本机到点提醒"></button></div>
     </section>
-    <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">
+    <div class="settings-tips">
       💡 全局快捷键 <b>${navigator.platform.includes("Mac") ? "⌘⇧Space" : "Ctrl+Shift+Space"}</b> 可在任意应用中唤起并聚焦输入框，快速记一笔。<br>
       ⏰ 输入「明天 15:00 开会」会自动识别日期与提醒时间。<br>
       输入 <b>#标签</b> 或 <b>+项目</b> 可分类，方向键选择、Tab / Enter 补全。<br>
       🖱️ 开启鼠标穿透后浮窗不再挡点击，可从<b>托盘菜单「切换鼠标穿透」</b>关回来。
     </div>
-    <div class="set-row" style="justify-content:flex-end"><button class="link-btn" data-s="close">完成</button></div>
   </div>`;
   document.body.appendChild(overlay);
 
@@ -1161,14 +1216,22 @@ function openSettings() {
         return;
       }
       else if (key === "autostart") { toggleAutostart(sw); return; }
-      else if (key === "lan") { overlay.remove(); openLanSettings(syncStore); return; }
-      else if (key === "sync") { overlay.remove(); openSyncSettings(syncStore); return; }
+      else if (key === "lan") { overlay.remove(); openLanSettings(syncStore, openSettings); return; }
+      else if (key === "sync") { overlay.remove(); openSyncSettings(syncStore, openSettings); return; }
       else if (key === "remindersEnabled") { state.settings.remindersEnabled = state.settings.remindersEnabled === false; sw.classList.toggle("on", state.settings.remindersEnabled); }
       else if (key === "export") { exportBackup(); return; }
       else if (key === "categories") { overlay.remove(); classificationUI.openManager(); return; }
       else if (key === "import") { importBackup(overlay); return; }
       else if (key === "close") { overlay.remove(); }
       save(); applyWindowChrome(); render();
+    }
+    const sf = e.target.closest("[data-surface]");
+    if (sf) {
+      state.settings.surfaceStyle = sf.dataset.surface;
+      overlay.querySelectorAll("[data-surface]").forEach((b) => b.classList.toggle("on", b === sf));
+      const shadowRow = overlay.querySelector("[data-shadow-row]");
+      if (shadowRow) shadowRow.hidden = state.settings.surfaceStyle !== "flat";
+      save(); applyWindowChrome();
     }
     const ap = e.target.closest("[data-ap]");
     if (ap) {

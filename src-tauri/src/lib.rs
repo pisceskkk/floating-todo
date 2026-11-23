@@ -8,6 +8,9 @@ mod sync_storage;
 mod lan;
 mod updates;
 
+#[cfg(target_os = "macos")]
+mod macos_surface;
+
 #[cfg(target_os = "windows")]
 mod windows_desktop;
 
@@ -94,6 +97,27 @@ fn set_window_screen_position(window: tauri::WebviewWindow, x: i32, y: i32) -> R
     }
 }
 
+/// 在 macOS 上切换原生毛玻璃材质（NSVisualEffectView）与精准内边距裁剪；其他平台为空操作。
+#[tauri::command]
+fn set_window_surface(
+    window: tauri::WebviewWindow,
+    vibrancy: bool,
+    theme: String,
+    radius: f64,
+    inset: f64,
+) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_surface::apply_surface(&window, vibrancy, &theme, radius, inset)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, vibrancy, theme, radius, inset);
+        Ok(false)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -125,7 +149,8 @@ pub fn run() {
             export_data,
             import_data,
             set_desktop_mode,
-            set_window_screen_position
+            set_window_screen_position,
+            set_window_surface
         ])
         .setup(|app| {
             // macOS：作为状态栏小组件运行，不占用程序坞。
