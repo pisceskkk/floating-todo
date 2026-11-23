@@ -1510,7 +1510,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tokio",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -7589,7 +7589,7 @@ dependencies = [
  "log",
  "serde",
  "thiserror 2.0.18",
- "windows 0.61.3",
+ "windows 0.62.2",
  "windows-core 0.62.2",
 ]
 
