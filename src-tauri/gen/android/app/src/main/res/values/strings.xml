@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">floating todo</string>
+    <string name="main_activity_title">floating todo</string>
+    <string name="widget_description">快速查看今日待办与每日打卡，支持桌面原地勾选完成和一键快速新建。</string>
+</resources>

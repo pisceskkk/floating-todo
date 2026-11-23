@@ -39,6 +39,9 @@
     "macOS": {
       "signingIdentity": "-"
     },
+    "iOS": {
+      "minimumSystemVersion": "15.0"
+    },
     "targets": ["dmg", "nsis"],
     "icon": [
       "icons/32x32.png",

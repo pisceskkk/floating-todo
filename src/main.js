@@ -115,6 +115,7 @@ let state = defaultState();
 syncStore = new SyncStore({
   invoke: (name, args) => TAURI.core.invoke(name, args),
   native: !!window.__TAURI_INTERNALS__,
+  mobile: isMobile,
   onChange: view => { state = view; render(); },
   onStatus: () => window.dispatchEvent(new Event('todo-sync-status')),
 });
@@ -406,7 +407,7 @@ function applyWindowChrome() {
   root.dataset.theme = state.settings.appearance;
   root.dataset.surface = surface;
   root.dataset.shadow = state.settings.shadowEnabled !== false ? "on" : "off";
-  root.style.setProperty("--opacity", state.settings.opacity);
+  root.style.setProperty("--opacity", isMobile ? "1" : state.settings.opacity);
   if (state.settings.customBg) {
     root.style.setProperty("--panel-top", state.settings.customBg);
     root.style.setProperty("--panel-bottom", state.settings.customBg);
@@ -720,9 +721,32 @@ function scrollTodoDrag() {
   drag.frame = requestAnimationFrame(scrollTodoDrag);
 }
 
+function activateTodoDrag(drag) {
+  if (drag.active) return;
+  drag.active = true;
+  clearTimeout(drag.holdTimer);
+  drag.holdTimer = null;
+  closeMenu();
+  try { app.setPointerCapture(drag.pointerId); } catch (e) {}
+  const bounds = drag.row.getBoundingClientRect();
+  drag.ghost = drag.row.cloneNode(true);
+  drag.ghost.classList.add("drag-ghost");
+  drag.ghost.inert = true;
+  drag.ghost.setAttribute("aria-hidden", "true");
+  drag.ghost.style.width = `${bounds.width}px`;
+  // Keep compact typography when the clone is outside #app.
+  document.body.appendChild(drag.ghost);
+  drag.row.classList.add("drag-placeholder");
+  document.documentElement.classList.add("sorting");
+  scrollTodoDrag();
+  updateTodoDrag();
+}
+
 function finishTodoDrag(commit = false, redraw = true) {
   const drag = todoDrag;
   if (!drag) return;
+  clearTimeout(drag.holdTimer);
+  drag.holdTimer = null;
   if (drag.viewportWidth !== innerWidth || drag.viewportHeight !== innerHeight) commit = false;
   todoDrag = null;
   if (drag.frame) cancelAnimationFrame(drag.frame);
@@ -754,10 +778,20 @@ app.addEventListener("pointerdown", (e) => {
   if (!row || e.target.closest(".check, .actions, a, input, textarea")) return;
   if (e.target.closest("button") && !e.target.closest(".drag-handle")) return;
   const bounds = row.getBoundingClientRect();
+  const touchLongPress = e.pointerType === "touch" && !e.target.closest(".drag-handle");
   todoDrag = { row, container: row.parentElement, pointerId: e.pointerId,
     viewportWidth: innerWidth, viewportHeight: innerHeight,
     startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
-    offsetX: e.clientX - bounds.left, offsetY: e.clientY - bounds.top, active: false };
+    offsetX: e.clientX - bounds.left, offsetY: e.clientY - bounds.top,
+    touchLongPress, holdTimer: null, active: false };
+  // On touch screens, touching a task row outside the drag handle requires a long press
+  // so normal vertical scrolling is never hijacked.
+  if (touchLongPress) {
+    const current = todoDrag;
+    current.holdTimer = setTimeout(() => {
+      if (todoDrag === current && !current.active) activateTodoDrag(current);
+    }, 280);
+  }
   // Capture only after movement so ordinary title clicks still edit normally.
 });
 
@@ -766,21 +800,13 @@ app.addEventListener("pointermove", (e) => {
   if (!drag || drag.pointerId !== e.pointerId) return;
   drag.x = e.clientX; drag.y = e.clientY;
   if (!drag.active) {
-    if (Math.hypot(drag.x - drag.startX, drag.y - drag.startY) < 5) return;
-    drag.active = true;
-    closeMenu();
-    app.setPointerCapture(e.pointerId);
-    const bounds = drag.row.getBoundingClientRect();
-    drag.ghost = drag.row.cloneNode(true);
-    drag.ghost.classList.add("drag-ghost");
-    drag.ghost.inert = true;
-    drag.ghost.setAttribute("aria-hidden", "true");
-    drag.ghost.style.width = `${bounds.width}px`;
-    // Keep compact typography when the clone is outside #app.
-    document.body.appendChild(drag.ghost);
-    drag.row.classList.add("drag-placeholder");
-    document.documentElement.classList.add("sorting");
-    scrollTodoDrag();
+    const dist = Math.hypot(drag.x - drag.startX, drag.y - drag.startY);
+    if (drag.touchLongPress) {
+      if (dist > 8) finishTodoDrag(false, false);
+      return;
+    }
+    if (dist < 5) return;
+    activateTodoDrag(drag);
   }
   e.preventDefault();
   updateTodoDrag();
@@ -1105,13 +1131,13 @@ function openSettings() {
     </section>
     <section class="settings-group" aria-labelledby="settings-appearance-title">
       <h3 id="settings-appearance-title">外观</h3>
-      <div>
+      ${isMobile ? "" : `<div>
         <div class="settings-field-label">界面样式</div>
         <div class="seg-control" role="group" aria-label="界面样式">
           <button type="button" class="${surface === "glass" ? "on" : ""}" data-surface="glass">毛玻璃</button>
           <button type="button" class="${surface === "flat" ? "on" : ""}" data-surface="flat">平面阴影</button>
         </div>
-      </div>
+      </div>`}
       <div>
         <div class="settings-field-label">主题</div>
         <div class="seg-control">
@@ -1382,9 +1408,9 @@ window.addEventListener('blur', () => {
   }, 80);
 });
 
-/* ---------------- 全局快捷键：快速捕获 ---------------- */
+/* ---------------- 全局快捷键与 Deep Link：快速捕获 ---------------- */
 
-TAURI?.event?.listen?.("quick-capture", async () => {
+async function triggerQuickCapture() {
   closeMenu();
   document.querySelector(".overlay")?.remove();
   if (windowUI.floating) { await openQuickCapture(); return; }
@@ -1395,7 +1421,63 @@ TAURI?.event?.listen?.("quick-capture", async () => {
     const mi = document.getElementById("main-input");
     if (mi) { mi.focus(); mi.select(); }
   }, 60);
+}
+
+function handleDeepLink(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "floatingtodo:") return false;
+    const action = (url.hostname || url.pathname.replace(/^\/+/, "")).toLowerCase();
+    if (action === "quick-capture") {
+      triggerQuickCapture();
+      return true;
+    }
+    if (action === "open") {
+      const day = url.searchParams.get("day");
+      if (DAYS.includes(day)) {
+        state.selectedDay = day;
+        save();
+      }
+      closeMenu();
+      document.querySelector(".overlay")?.remove();
+      render();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+TAURI?.event?.listen?.("quick-capture", () => { triggerQuickCapture(); });
+TAURI?.event?.listen?.("deep-link", (event) => {
+  const payload = event?.payload;
+  if (typeof payload === "string") handleDeepLink(payload);
+  else if (Array.isArray(payload)) payload.forEach(handleDeepLink);
 });
+window.addEventListener("floatingtodo-deep-link", (e) => handleDeepLink(e.detail));
+
+// 移动端禁用双指缩放并适配软键盘弹出视口
+if (isMobile) {
+  for (const evt of ["gesturestart", "gesturechange", "gestureend"]) {
+    document.addEventListener(evt, (e) => e.preventDefault(), { passive: false });
+  }
+  document.addEventListener("touchmove", (e) => {
+    if (e.touches && e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+}
+if (isMobile && window.visualViewport) {
+  const syncMobileViewport = () => {
+    const h = Math.round(window.visualViewport.height);
+    if (h > 0) document.documentElement.style.setProperty("--mobile-viewport-height", `${h}px`);
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      setTimeout(() => active.scrollIntoView?.({ block: "nearest", behavior: "smooth" }), 50);
+    }
+  };
+  window.visualViewport.addEventListener("resize", syncMobileViewport);
+  window.visualViewport.addEventListener("scroll", syncMobileViewport);
+  syncMobileViewport();
+}
 
 // 托盘「切换鼠标穿透」：翻转穿透开关（穿透开启时浮窗点不动，这是唯一可靠的关闭入口）
 TAURI?.event?.listen?.("toggle-passthrough", () => {
@@ -1433,6 +1515,7 @@ window.addEventListener('beforeunload', () => syncStore.stop());
 
 app.addEventListener('focusout', e => { if (e.target.id === 'memo-input' && memoSaveTimer) save(); });
 window.addEventListener('pagehide', () => { if (memoSaveTimer) save(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && memoSaveTimer) save(); });
 let lastStorageError = '';
 window.addEventListener('todo-sync-status', () => {
   if (syncStore.storageError && syncStore.storageError !== lastStorageError) classificationUI.showNotice(syncStore.error);

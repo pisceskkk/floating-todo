@@ -142,3 +142,77 @@ test('LAN notification during an active pull schedules a second pass', async () 
   assert.equal(pulls, 2);
   clearTimeout(store.lanTimer);
 });
+
+test('reloadFromDisk adopts external widget changes when localGeneration advances', async () => {
+  let saved = null, generation = 0;
+  const invoke = async (name, args) => {
+    if (name === 'storage_load') return saved;
+    if (name === 'storage_save') {
+      const doc = JSON.parse(args.json);
+      doc.localGeneration = ++generation;
+      saved = JSON.stringify(doc);
+      return generation;
+    }
+    return null;
+  };
+  let latestView = null;
+  const store = new SyncStore({ invoke, native: true, onChange: view => { latestView = view; } });
+  const initial = await store.init(snapshot());
+  assert.equal(store.persistedGeneration, 1);
+
+  // Simulate widget writing a new task revision directly to SQLite with localGeneration + 1
+  const diskDoc = JSON.parse(saved);
+  diskDoc.revisions.push({
+    revisionId: 'widget-rev-1', entityType: 'task', entityId: 'wt-1', parentRevisionIds: [],
+    deviceId: diskDoc.deviceId, modifiedAt: Date.now(), logicalCounter: 0, deleted: false,
+    payload: { id: 'wt-1', kind: 'one_off', title: '小部件新增', detail: '', time: null, completed: false, createdAt: 100, scheduledDate: initial.lastActiveDate, projectId: null, tagIds: [] },
+  });
+  diskDoc.outbox.push('widget-rev-1');
+  diskDoc.localGeneration = ++generation;
+  saved = JSON.stringify(diskDoc);
+
+  const reloaded = await store.reloadFromDisk();
+  assert.equal(reloaded, true);
+  assert.equal(store.persistedGeneration, 2);
+  assert.equal(latestView.itemsByDay.today.length, 1);
+  assert.equal(latestView.itemsByDay.today[0].title, '小部件新增');
+  assert.equal(await store.reloadFromDisk(), false);
+  clearTimeout(store.timer);
+});
+
+test('mobile visibilitychange pauses LAN on background and resumes with poll on foreground', async () => {
+  let saved = null, generation = 0;
+  const calls = [];
+  const invoke = async (name, args) => {
+    calls.push(name);
+    if (name === 'storage_load') return saved;
+    if (name === 'storage_save') {
+      const doc = JSON.parse(args.json);
+      doc.localGeneration = ++generation;
+      saved = JSON.stringify(doc);
+      return generation;
+    }
+    if (name === 'lan_device_name') return 'iPhone';
+    if (name === 'lan_start') return { enabled: true };
+    if (name === 'lan_stop') return null;
+    if (name === 'lan_poll') return null;
+    if (name === 'lan_pull') return [];
+    return null;
+  };
+  const store = new SyncStore({ invoke, native: true, mobile: true });
+  await store.init(snapshot());
+  await store.configureLan(true, 'My iPhone');
+  calls.length = 0;
+
+  await store.handleVisibilityChange(true);
+  assert.ok(calls.includes('lan_stop'));
+  assert.equal(store.lanPausedForBackground, true);
+
+  calls.length = 0;
+  await store.handleVisibilityChange(false);
+  assert.ok(calls.includes('lan_start'));
+  assert.ok(calls.includes('lan_poll'));
+  assert.equal(store.lanPausedForBackground, false);
+  clearTimeout(store.lanTimer);
+  clearTimeout(store.timer);
+});

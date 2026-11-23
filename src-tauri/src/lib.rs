@@ -10,6 +10,7 @@ mod credential_store;
 mod lan;
 mod sync_storage;
 mod updates;
+mod widget_core;
 
 #[cfg(target_os = "macos")]
 mod macos_surface;
@@ -30,40 +31,72 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
-/// 导出数据到用户选择的文件。
+/// 导出数据到用户选择的文件（移动端写入应用缓存目录以便原生分享）。
 #[tauri::command]
 async fn export_data(app: AppHandle, json: String) -> Result<bool, String> {
-    let file = app
-        .dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .set_file_name("floating-todo-backup.json")
-        .blocking_save_file();
-    match file {
-        Some(p) => {
-            let path = p.into_path().map_err(|e| e.to_string())?;
-            std::fs::write(path, json).map_err(|e| e.to_string())?;
-            Ok(true)
+    #[cfg(desktop)]
+    {
+        let file = app
+            .dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .set_file_name("floating-todo-backup.json")
+            .blocking_save_file();
+        match file {
+            Some(p) => {
+                let path = p.into_path().map_err(|e| e.to_string())?;
+                std::fs::write(path, json).map_err(|e| e.to_string())?;
+                Ok(true)
+            }
+            None => Ok(false),
         }
-        None => Ok(false),
+    }
+    #[cfg(mobile)]
+    {
+        let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join("floating-todo-backup.json");
+        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+        Ok(true)
     }
 }
 
 /// 从用户选择的文件导入数据，返回文件内容。
 #[tauri::command]
 async fn import_data(app: AppHandle) -> Result<Option<String>, String> {
-    let file = app
-        .dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .blocking_pick_file();
-    match file {
-        Some(p) => {
-            let path = p.into_path().map_err(|e| e.to_string())?;
-            let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            Ok(Some(content))
+    #[cfg(desktop)]
+    {
+        let file = app
+            .dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .blocking_pick_file();
+        match file {
+            Some(p) => {
+                let path = p.into_path().map_err(|e| e.to_string())?;
+                let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                Ok(Some(content))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
+    }
+    #[cfg(mobile)]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .pick_file(move |file| {
+                let _ = tx.send(file);
+            });
+        match rx.await.map_err(|e| e.to_string())? {
+            Some(p) => {
+                let path = p.into_path().map_err(|e| e.to_string())?;
+                let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                Ok(Some(content))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -129,6 +162,7 @@ fn set_window_surface(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .manage(lan::LanState::default())
         .plugin(tauri_plugin_opener::init())
@@ -155,6 +189,8 @@ pub fn run() {
             sync_storage::dav_request,
             updates::check_for_updates,
             updates::installed_version,
+            widget_core::widget_snapshot,
+            widget_core::widget_toggle,
             export_data,
             import_data,
             set_desktop_mode,
@@ -162,6 +198,8 @@ pub fn run() {
             set_window_surface
         ])
         .setup(|app| {
+            #[cfg(not(desktop))]
+            let _ = app;
             // macOS：作为状态栏小组件运行，不占用程序坞。
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);

@@ -1,9 +1,10 @@
 import { canonical, digest, projectView, commitView, mergeRevisions, conflicts, exportDocument, currentEntities, importRevisionsAsEdits, newDocument } from './sync-model.js';
 const CACHE_KEY = 'floating-todo/v3-preview';
 export class SyncStore {
-  constructor({ invoke, native = false, onChange = () => {}, onStatus = () => {} }) {
-    this.invoke = invoke; this.native = native; this.onChange = onChange; this.onStatus = onStatus;
+  constructor({ invoke, native = false, mobile = false, onChange = () => {}, onStatus = () => {} }) {
+    this.invoke = invoke; this.native = native; this.mobile = mobile; this.onChange = onChange; this.onStatus = onStatus;
     this.queue = Promise.resolve(); this.error = ''; this.busy = false; this.timer = null; this.retryAt = 0; this.failures = 0; this.persistedGeneration = 0;
+    this.lanPausedForBackground = false;
   }
   async init(defaults) {
     const saved = this.native ? await this.invoke('storage_load') : localStorage.getItem(CACHE_KEY);
@@ -127,11 +128,61 @@ export class SyncStore {
       if (this.lanRequested) this.scheduleLan();
     }
   }
+  async reloadFromDisk() {
+    if (this.busy || this.lanBusy) return false;
+    await this.queue.catch(() => {});
+    const saved = this.native ? await this.invoke('storage_load') : localStorage.getItem(CACHE_KEY);
+    if (!saved) return false;
+    const disk = JSON.parse(saved);
+    const diskGen = disk.localGeneration || 0;
+    if (diskGen <= this.persistedGeneration) return false;
+    if (disk.schemaVersion !== 3 || disk.protocolVersion !== 1) return false;
+    const check = newDocument(); mergeRevisions(check, disk.revisions);
+    this.doc = disk;
+    this.persistedGeneration = diskGen;
+    this.refresh();
+    this.schedule();
+    if (this.native && this.doc.lan?.enabled) this.pollLan();
+    return true;
+  }
+  async handleVisibilityChange(hidden) {
+    if (hidden) {
+      if (this.mobile && this.native && this.doc?.lan?.enabled) {
+        const deadline = Date.now() + 4000;
+        while (this.lanBusy && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+        // If we already returned to foreground while waiting, do not stop LAN.
+        if (typeof document !== 'undefined' && !document.hidden) return;
+        this.lanPausedForBackground = true;
+        await this.invoke('lan_stop').catch(() => {});
+      }
+      return;
+    }
+    await this.reloadFromDisk().catch(() => {});
+    if (this.native && this.doc?.lan?.enabled) {
+      if (this.lanPausedForBackground) {
+        this.lanPausedForBackground = false;
+        const name = this.doc.lan.name?.trim() || await this.lanDeviceName();
+        await this.invoke('lan_start', { name }).catch(error => {
+          this.lanError = String(error); this.onStatus();
+        });
+      }
+      this.pollLan();
+    }
+    if (this.doc?.sync?.enabled) this.sync().catch(() => {});
+  }
   start() {
     this.interval = setInterval(() => { if (Date.now() >= this.retryAt) this.sync().catch(() => {}); }, 60000);
-    this.online = () => { this.sync().catch(() => {}); if (this.doc.lan?.enabled) this.pollLan(); };
+    this.online = () => {
+      this.reloadFromDisk().catch(() => {});
+      this.sync().catch(() => {});
+      if (this.doc.lan?.enabled) this.pollLan();
+    };
+    this.onVisibility = () => { this.handleVisibilityChange(document.hidden).catch(() => {}); };
     window.addEventListener('online', this.online);
     window.addEventListener('focus', this.online);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibility);
     this.schedule();
     if (this.native) {
       this.lanStopped = false;
@@ -150,7 +201,12 @@ export class SyncStore {
   pollLan() {
     if (this.native && this.doc.lan?.enabled) this.invoke('lan_poll').catch(() => {}).finally(() => this.scheduleLan());
   }
-  stop() { this.lanStopped = true; this.lanUnlisten?.(); clearTimeout(this.lanInterval); clearTimeout(this.lanTimer); clearInterval(this.interval); clearTimeout(this.timer); window.removeEventListener('online', this.online); window.removeEventListener('focus', this.online); }
+  stop() {
+    this.lanStopped = true; this.lanUnlisten?.(); clearTimeout(this.lanInterval); clearTimeout(this.lanTimer);
+    clearInterval(this.interval); clearTimeout(this.timer);
+    window.removeEventListener('online', this.online); window.removeEventListener('focus', this.online);
+    if (typeof document !== 'undefined' && this.onVisibility) document.removeEventListener('visibilitychange', this.onVisibility);
+  }
   status() {
     return { busy: this.busy, error: this.error, pending: this.doc.outbox.length, conflicts: conflicts(this.doc).length, lastSuccess: this.doc.sync.lastSuccess, enabled: this.doc.sync.enabled };
   }

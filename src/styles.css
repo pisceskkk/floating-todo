@@ -2253,30 +2253,249 @@ textarea:focus-visible {
   text-overflow: ellipsis;
 }
 
-/* ---------- 移动端全屏与安全区域适配 ---------- */
+/* ---------- 移动端全屏、高对比浅/深色主题与触控布局适配 ---------- */
 html.platform-mobile {
   --panel-inset: 0px;
   --panel-radius: 0px;
+  --opacity: 1;
+  --sheet-alpha: 1;
+  --panel-blur: none;
+  --sheet-blur: none;
+
+  /* 浅色默认：高亮度纯白背景 + 高对比文字 */
+  --text: #111827;
+  --text-secondary: #6b7280;
+  --panel-top: 255, 255, 255;
+  --panel-bottom: 247, 248, 250;
+  --row-bg: 255, 255, 255;
+  --row-bg-alpha: 1;
+  --row-hover-alpha: 1;
+  --row-border-alpha: 1;
+  --row-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --control-bg: 243, 244, 246;
+  --control-alpha: 1;
+  --control-hover-alpha: 1;
+  --control-stroke: rgba(15, 23, 42, 0.1);
+  --control-shadow: none;
+  --border: 229, 231, 235;
+  --border-alpha: 0.95;
+  --divider: rgba(15, 23, 42, 0.08);
+  --segment-bg: 15, 23, 42;
+  --segment-alpha: 0.06;
+  --selected-seg: 255, 255, 255;
+  --selected-alpha: 1;
+  --selected-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  -webkit-text-size-adjust: 100%;
+  touch-action: pan-y;
+}
+
+html.platform-mobile[data-theme="dark"] {
+  /* 深色默认：低亮度纯黑背景 + 深灰卡片 */
+  --text: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --panel-top: 0, 0, 0;
+  --panel-bottom: 8, 10, 14;
+  --row-bg: 22, 24, 30;
+  --row-bg-alpha: 1;
+  --row-hover-alpha: 1;
+  --row-border-alpha: 1;
+  --row-shadow: none;
+  --control-bg: 24, 27, 34;
+  --control-alpha: 1;
+  --control-hover-alpha: 1;
+  --control-stroke: rgba(255, 255, 255, 0.1);
+  --border: 38, 42, 54;
+  --border-alpha: 1;
+  --divider: rgba(255, 255, 255, 0.09);
+  --segment-bg: 255, 255, 255;
+  --segment-alpha: 0.08;
+  --selected-seg: 38, 42, 54;
+  --selected-alpha: 1;
+  --selected-shadow: none;
+  background: #000000;
+}
+
+@media (prefers-color-scheme: dark) {
+  html.platform-mobile[data-theme="system"] {
+    --text: #f3f4f6;
+    --text-secondary: #9ca3af;
+    --panel-top: 0, 0, 0;
+    --panel-bottom: 8, 10, 14;
+    --row-bg: 22, 24, 30;
+    --row-bg-alpha: 1;
+    --row-hover-alpha: 1;
+    --row-border-alpha: 1;
+    --row-shadow: none;
+    --control-bg: 24, 27, 34;
+    --control-alpha: 1;
+    --control-hover-alpha: 1;
+    --control-stroke: rgba(255, 255, 255, 0.1);
+    --border: 38, 42, 54;
+    --border-alpha: 1;
+    --divider: rgba(255, 255, 255, 0.09);
+    --segment-bg: 255, 255, 255;
+    --segment-alpha: 0.08;
+    --selected-seg: 38, 42, 54;
+    --selected-alpha: 1;
+    --selected-shadow: none;
+    background: #000000;
+  }
+}
+
+html.platform-mobile,
+html.platform-mobile body {
+  width: 100vw;
+  max-width: 100vw;
+  height: var(--mobile-viewport-height, 100dvh);
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: rgb(var(--panel-top));
 }
 
 html.platform-mobile .panel {
   inset: 0;
+  width: 100vw;
+  max-width: 100vw;
+  height: var(--mobile-viewport-height, 100dvh);
   border-radius: 0;
   border: 0;
   box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: linear-gradient(180deg, rgb(var(--panel-top)) 0%, rgb(var(--panel-bottom)) 100%);
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 
+html.platform-mobile .resize {
+  display: none;
+}
+
+/* 移动端输入统一 >= 16px，彻底阻止 iOS WKWebView 聚焦自动缩放 */
+html.platform-mobile input:not([type="color"]):not([type="range"]),
+html.platform-mobile textarea,
+html.platform-mobile select {
+  font-size: 16px !important;
+}
+
+/* 移动端主界面间距、字号与触控热区优化 */
+html.platform-mobile .topbar {
+  padding: 10px 16px 6px;
+}
+
+html.platform-mobile .day-tabs {
+  margin: 0 16px 8px;
+  padding: 3px;
+  border-radius: 12px;
+}
+
+html.platform-mobile .day-seg {
+  min-height: 38px;
+  font-size: 13.5px;
+  border-radius: 9px;
+}
+
+html.platform-mobile .composer,
+html.platform-mobile .add-box {
+  margin-left: 16px;
+  margin-right: 16px;
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+html.platform-mobile .list {
+  padding: 6px 16px 16px;
+  gap: 8px;
+  overflow-x: hidden;
+}
+
+html.platform-mobile .row {
+  min-height: 50px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(var(--border), var(--border-alpha));
+}
+
+html.platform-mobile .row .title {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+html.platform-mobile .row .detail,
+html.platform-mobile .row .meta {
+  font-size: 12.5px;
+}
+
+/* 移动端增大复选框与操作按钮热区（最小 44×44px），避免误触 */
+html.platform-mobile .check,
+html.platform-mobile .icon-btn,
+html.platform-mobile .drag-handle {
+  position: relative;
+}
+
+html.platform-mobile .check::after,
+html.platform-mobile .icon-btn::after,
+html.platform-mobile .drag-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 44px;
+  min-height: 44px;
+}
+
+html.platform-mobile .icon-btn {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+html.platform-mobile .drag-handle {
+  width: 28px;
+  min-height: 36px;
+  opacity: 0.65;
+}
+
+/* 移动端弹窗改为原生底部 Sheet 样式，固定满宽不溢出 */
 html.platform-mobile .overlay {
   inset: 0;
   border-radius: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.44);
 }
 
-html.platform-mobile .resize {
-  display: none;
+html.platform-mobile .settings,
+html.platform-mobile .sync-settings,
+html.platform-mobile .category-sheet,
+html.platform-mobile .modal {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  max-height: 88dvh;
+  border-radius: 22px 22px 0 0;
+  border-bottom: 0;
+  background: rgb(var(--panel-top));
+  padding: 18px 18px calc(20px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+html.platform-mobile .set-row,
+html.platform-mobile .data-btn {
+  min-height: 44px;
+  font-size: 14.5px;
+}
+
+html.platform-mobile .sheet-header h2,
+html.platform-mobile .category-header h2 {
+  font-size: 17px;
 }
 
 @media (max-height: 420px) {

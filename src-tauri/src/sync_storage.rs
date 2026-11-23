@@ -2,15 +2,109 @@ use reqwest::{header, Client, Method};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
-fn connection(app: &AppHandle) -> Result<Connection, String> {
+/// Resolve the shared data directory for SQLite storage.
+/// On iOS, prefers the App Group container (`group.<bundle-id>` / `group.com.gaopengfei.floating-todo`)
+/// so the main app and WidgetKit extension share `todo-v3.sqlite3`, migrating any legacy sandbox DB.
+pub fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(target_os = "ios")]
+    {
+        if let Some(group_dir) = ios_app_group_dir() {
+            std::fs::create_dir_all(&group_dir).map_err(|e| e.to_string())?;
+            let target_db = group_dir.join("todo-v3.sqlite3");
+            if !target_db.exists() {
+                if let Ok(legacy_dir) = app.path().app_data_dir() {
+                    let legacy_db = legacy_dir.join("todo-v3.sqlite3");
+                    if legacy_db.exists() {
+                        let _ = std::fs::copy(&legacy_db, &target_db);
+                    }
+                }
+            }
+            return Ok(group_dir);
+        }
+    }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let db = Connection::open(dir.join("todo-v3.sqlite3")).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[cfg(target_os = "ios")]
+fn ios_app_group_dir() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("FLOATING_TODO_APP_GROUP_DIR") {
+        let p = PathBuf::from(path);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    use std::ffi::{c_char, c_void, CStr};
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+    const RTLD_DEFAULT: *mut c_void = (-2isize) as *mut c_void;
+    unsafe {
+        let get_sym = dlsym(
+            RTLD_DEFAULT,
+            b"floating_todo_ios_app_group_dir\0".as_ptr() as *const c_char,
+        );
+        let free_sym = dlsym(
+            RTLD_DEFAULT,
+            b"floating_todo_ios_free_string\0".as_ptr() as *const c_char,
+        );
+        if get_sym.is_null() {
+            return None;
+        }
+        let get_fn: extern "C" fn() -> *mut c_char = std::mem::transmute(get_sym);
+        let ptr = get_fn();
+        if ptr.is_null() {
+            return None;
+        }
+        let result = CStr::from_ptr(ptr)
+            .to_str()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from);
+        if !free_sym.is_null() {
+            let free_fn: extern "C" fn(*mut c_char) = std::mem::transmute(free_sym);
+            free_fn(ptr);
+        }
+        result
+    }
+}
+
+pub fn storage_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join("todo-v3.sqlite3"))
+}
+
+/// Platform hook invoked after local SQLite commits to refresh native Home Screen Widgets.
+pub fn notify_widgets(app: &AppHandle) {
+    let _ = app;
+    #[cfg(target_os = "ios")]
+    {
+        use std::ffi::{c_char, c_void};
+        extern "C" {
+            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+        }
+        const RTLD_DEFAULT: *mut c_void = (-2isize) as *mut c_void;
+        unsafe {
+            let sym = dlsym(
+                RTLD_DEFAULT,
+                b"floating_todo_ios_reload_widgets\0".as_ptr() as *const c_char,
+            );
+            if !sym.is_null() {
+                let reload_fn: extern "C" fn() = std::mem::transmute(sym);
+                reload_fn();
+            }
+        }
+    }
+}
+
+fn connection(app: &AppHandle) -> Result<Connection, String> {
+    let db = Connection::open(storage_db_path(app)?).map_err(|e| e.to_string())?;
     db.busy_timeout(Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     initialize_connection(&db)?;
@@ -45,6 +139,7 @@ pub fn storage_save(
     let mut db = connection(&app)?;
     let generation = save_document(&mut db, &json, expected_generation)?;
     crate::lan::publish(&app, &json);
+    notify_widgets(&app);
     Ok(generation)
 }
 
