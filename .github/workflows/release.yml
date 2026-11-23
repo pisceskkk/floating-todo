@@ -193,28 +193,20 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          PROJ=$(find src-tauri/gen/apple -maxdepth 1 -name "*.xcodeproj" | head -n 1)
-          test -n "$PROJ"
-          SCHEME=$(xcodebuild -project "$PROJ" -list -json | python3 -c 'import json,sys; s=json.load(sys.stdin)["project"]["schemes"]; print(next((x for x in s if "iOS" in x), s[0]))')
-          echo "Building project=$PROJ scheme=$SCHEME"
-          xcodebuild \
-            -project "$PROJ" \
-            -scheme "$SCHEME" \
-            -configuration release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            CONFIGURATION_BUILD_DIR="$PWD/build-ios" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
-          APP_DIR=$(find "$PWD/build-ios" -maxdepth 1 -name "*.app" | head -n 1)
-          test -n "$APP_DIR"
-          mkdir -p dist-mobile Payload
-          cp -R "$APP_DIR" Payload/
+          npm run tauri -- ios build --ci --no-sign
+          mkdir -p dist-mobile
           OUT_IPA="$PWD/dist-mobile/floating-todo_${TAG}_ios-unsigned.ipa"
-          zip -qr "$OUT_IPA" Payload
-          rm -rf Payload
+          BUILT_IPA=$(find src-tauri/gen/apple/build -name "*.ipa" | head -n 1 || true)
+          if [ -n "$BUILT_IPA" ]; then
+            cp "$BUILT_IPA" "$OUT_IPA"
+          else
+            APP_DIR=$(find src-tauri/gen/apple/build -name "*.app" | head -n 1)
+            test -n "$APP_DIR"
+            mkdir -p Payload
+            cp -R "$APP_DIR" Payload/
+            zip -qr "$OUT_IPA" Payload
+            rm -rf Payload
+          fi
           ls -lh "$OUT_IPA"
 
       - uses: actions/upload-artifact@v4
