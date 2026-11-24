@@ -99,7 +99,7 @@ pub fn set_screen_position(hwnd: HWND, x: i32, y: i32) -> Result<(), String> {
     if unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } & WS_CHILD.0 as isize != 0 {
         let parent = unsafe { GetParent(hwnd) }.map_err(|error| error.to_string())?;
         if !unsafe { ScreenToClient(parent, &mut position) }.as_bool() {
-            return Err(windows::core::Error::from_win32().to_string());
+            return Err(windows::core::Error::from_thread().to_string());
         }
     }
     position_and_refresh(hwnd, position)
@@ -127,7 +127,7 @@ pub fn set_desktop_mode(hwnd: HWND, enabled: bool) -> Result<(), String> {
         };
         let mut desktop_position = screen_position;
         if !unsafe { ScreenToClient(host, &mut desktop_position) }.as_bool() {
-            return Err(windows::core::Error::from_win32().to_string());
+            return Err(windows::core::Error::from_thread().to_string());
         }
 
         let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
