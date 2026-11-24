@@ -91,6 +91,7 @@ impl IrohTransport {
         let endpoint = builder
             .secret_key(secret_key)
             .alpns(vec![IROH_ALPN.to_vec()])
+            .proxy_from_env()
             .bind()
             .await
             .map_err(|e| format!("启动 Iroh 跨网通道失败：{e}"))?;
