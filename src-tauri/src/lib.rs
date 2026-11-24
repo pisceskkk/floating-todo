@@ -109,7 +109,7 @@ fn set_desktop_mode(app: AppHandle, enabled: bool) -> Result<(), String> {
             .get_webview_window("main")
             .ok_or_else(|| "main window not found".to_string())?;
         let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        windows_desktop::set_desktop_mode(hwnd, enabled)
+        windows_desktop::set_desktop_mode(windows::Win32::Foundation::HWND(hwnd.0), enabled)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -124,7 +124,7 @@ fn set_window_screen_position(window: tauri::WebviewWindow, x: i32, y: i32) -> R
     #[cfg(target_os = "windows")]
     {
         let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        windows_desktop::set_screen_position(hwnd, x, y)
+        windows_desktop::set_screen_position(windows::Win32::Foundation::HWND(hwnd.0), x, y)
     }
     #[cfg(all(desktop, not(target_os = "windows")))]
     {
