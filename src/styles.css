@@ -2345,19 +2345,23 @@ html.platform-mobile[data-theme="dark"] {
 
 html.platform-mobile,
 html.platform-mobile body {
-  width: 100vw;
+  width: 100%;
   max-width: 100vw;
-  height: var(--mobile-viewport-height, 100dvh);
+  height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
   background: rgb(var(--panel-top));
 }
 
 html.platform-mobile .panel {
-  inset: 0;
-  width: 100vw;
+  position: fixed;
+  top: var(--mobile-vv-offset-top, 0px);
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: 100%;
   max-width: 100vw;
-  height: var(--mobile-viewport-height, 100dvh);
+  height: 100%;
   border-radius: 0;
   border: 0;
   box-shadow: none;
@@ -2404,6 +2408,41 @@ html.platform-mobile .add-box {
   margin-right: 16px;
   min-height: 46px;
   border-radius: 14px;
+}
+
+html.platform-mobile .main-composer {
+  position: relative;
+  z-index: 30;
+  will-change: transform;
+  transform: translateY(calc(-1 * var(--mobile-composer-lift, 0px)));
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+html.platform-mobile.mobile-composer-lifted .main-composer {
+  background: rgb(var(--row-bg));
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16), 0 0 0 2.5px rgba(var(--accent-rgb), 0.14);
+}
+
+html.platform-mobile.mobile-composer-lifted .main-composer + .classification-preview {
+  position: relative;
+  z-index: 30;
+  transform: translateY(calc(-1 * var(--mobile-composer-lift, 0px)));
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.platform-mobile .memo {
+  position: relative;
+  transform: translateY(calc(-1 * var(--mobile-memo-lift, 0px)));
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.platform-mobile.mobile-memo-lifted .memo {
+  z-index: 30;
+  background: rgb(var(--row-bg));
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
 }
 
 html.platform-mobile .list {
@@ -2461,7 +2500,12 @@ html.platform-mobile .drag-handle {
 
 /* 移动端弹窗改为原生底部 Sheet 样式，固定满宽不溢出 */
 html.platform-mobile .overlay {
-  inset: 0;
+  position: fixed;
+  top: var(--mobile-vv-offset-top, 0px);
+  left: 0;
+  right: 0;
+  bottom: auto;
+  height: var(--mobile-visual-height, 100%);
   border-radius: 0;
   display: flex;
   align-items: flex-end;
@@ -2477,7 +2521,7 @@ html.platform-mobile .modal {
   width: 100%;
   max-width: 100%;
   margin: 0;
-  max-height: 88dvh;
+  max-height: min(88dvh, calc(var(--mobile-visual-height, 100dvh) - 24px));
   border-radius: 22px 22px 0 0;
   border-bottom: 0;
   background: rgb(var(--panel-top));
@@ -2711,6 +2755,52 @@ html.platform-mobile .category-header h2 {
 .update-status {
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.update-progress {
+  width: 100%;
+  height: 6px;
+  margin: 6px 0 2px;
+  border-radius: 999px;
+  background: var(--hover-bg, rgba(128, 128, 128, 0.16));
+  overflow: hidden;
+}
+
+.update-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent, #2f7df6);
+  transition: width 160ms ease;
+}
+
+.update-progress-bar.indeterminate {
+  animation: update-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes update-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+.update-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.update-install-btn {
+  background: var(--accent, #2f7df6);
+  color: #fff;
+  border-color: transparent;
+}
+
+.update-install-btn[hidden],
+.update-progress[hidden] {
+  display: none;
+}
+
+.update-install-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 
 .update-available [data-act="settings"] {

@@ -248,4 +248,48 @@ jobs:
                     -f name="floating-todo_${name#*_}" && echo "renamed $name -> floating-todo_${name#*_}" ;;
             esac
           done
+          mkdir -p manifest-assets
+          gh release download "$tag" --repo "${{ github.repository }}" \
+            -p '*_aarch64.dmg' -p '*_x64.dmg' -p '*_x64-setup.exe' -p '*_arm64-setup.exe' \
+            -D manifest-assets || true
+          python3 - "$tag" "${{ github.repository }}" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+
+          tag, repo = sys.argv[1], sys.argv[2]
+          platforms = {}
+          for path in sorted(Path("manifest-assets").glob("*")):
+              if not path.is_file():
+                  continue
+              name = path.name
+              lower = name.lower()
+              if lower.endswith("_aarch64.dmg") or lower.endswith("_arm64.dmg"):
+                  key = "darwin-aarch64"
+              elif lower.endswith("_x64.dmg") or lower.endswith("_x86_64.dmg"):
+                  key = "darwin-x86_64"
+              elif lower.endswith("_x64-setup.exe"):
+                  key = "windows-x86_64"
+              elif lower.endswith("_arm64-setup.exe"):
+                  key = "windows-aarch64"
+              else:
+                  continue
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              platforms[key] = {
+                  "name": name,
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+                  "sha256": h.hexdigest(),
+                  "size": path.stat().st_size,
+              }
+          manifest = {
+              "version": tag.lstrip("v"),
+              "tag": tag,
+              "platforms": platforms,
+          }
+          Path("update-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          print("Generated update-manifest.json with platforms:", list(platforms.keys()))
+          PY
+          gh release upload "$tag" update-manifest.json --repo "${{ github.repository }}" --clobber
           gh release edit "$tag" --repo "${{ github.repository }}" --draft=false

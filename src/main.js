@@ -547,7 +547,7 @@ function render() {
     }
     // 输入框
     const editing = composerEditId;
-    html += `<div class="composer">
+    html += `<div class="composer main-composer">
       <span class="ic">${editing ? ICONS.pencil : ICONS.plus}</span>
       <input id="main-input" placeholder="${editing ? "编辑待办标题" : "添加" + DAY_TITLE[state.selectedDay] + "待办"}" value="${esc(draft)}"/>
       ${editing ? `<button class="icon-btn sm" data-act="canceledit">${ICONS.x}</button>` : ""}
@@ -571,7 +571,7 @@ function render() {
   classificationUI.afterRender();
   if (restoreInput && !focusMain && !focusRecur) {
     const field = document.getElementById(restoreInput.id);
-    field?.focus(); field?.setSelectionRange(restoreInput.start, restoreInput.end);
+    field?.focus({ preventScroll: true }); field?.setSelectionRange(restoreInput.start, restoreInput.end);
   }
 
   // 头部可拖动
@@ -581,14 +581,15 @@ function render() {
   // 保持输入焦点
   if (focusMain) {
     const mi = document.getElementById("main-input");
-    if (mi) { mi.focus(); mi.setSelectionRange(mi.value.length, mi.value.length); }
+    if (mi) { mi.focus({ preventScroll: true }); mi.setSelectionRange(mi.value.length, mi.value.length); }
     focusMain = false;
   }
   if (focusRecur) {
     const ri = document.getElementById("recur-input");
-    if (ri) ri.focus();
+    if (ri) ri.focus({ preventScroll: true });
     focusRecur = false;
   }
+  syncMobileViewport();
 }
 
 /* ---------------- 交互状态 ---------------- */
@@ -1106,6 +1107,7 @@ function openDetailEditor(id, day) {
 
 const updateChecker = createUpdateChecker({
   invoke: TAURI?.core?.invoke ? name => TAURI.core.invoke(name) : null,
+  listen: TAURI?.event?.listen ? (event, handler) => TAURI.event.listen(event, handler) : null,
   openExternal,
   notice: text => classificationUI.showNotice(text),
 });
@@ -1419,7 +1421,7 @@ async function triggerQuickCapture() {
   render();
   setTimeout(() => {
     const mi = document.getElementById("main-input");
-    if (mi) { mi.focus(); mi.select(); }
+    if (mi) { mi.focus({ preventScroll: true }); mi.select(); }
   }, 60);
 }
 
@@ -1456,7 +1458,8 @@ TAURI?.event?.listen?.("deep-link", (event) => {
 });
 window.addEventListener("floatingtodo-deep-link", (e) => handleDeepLink(e.detail));
 
-// 移动端禁用双指缩放并适配软键盘弹出视口
+// 移动端禁用双指缩放并适配软键盘弹出（仅顶起主输入框，保持其余界面不动）
+let syncMobileViewport = () => {};
 if (isMobile) {
   for (const evt of ["gesturestart", "gesturechange", "gestureend"]) {
     document.addEventListener(evt, (e) => e.preventDefault(), { passive: false });
@@ -1465,17 +1468,93 @@ if (isMobile) {
     if (e.touches && e.touches.length > 1) e.preventDefault();
   }, { passive: false });
 }
-if (isMobile && window.visualViewport) {
-  const syncMobileViewport = () => {
-    const h = Math.round(window.visualViewport.height);
-    if (h > 0) document.documentElement.style.setProperty("--mobile-viewport-height", `${h}px`);
-    const active = document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
-      setTimeout(() => active.scrollIntoView?.({ block: "nearest", behavior: "smooth" }), 50);
+if (isMobile) {
+  const KEYBOARD_THRESHOLD = 60;
+  const KEYBOARD_GAP = 10;
+  let lastMobileInputTarget = null; // "main" | "memo" | null
+
+  const untransformedBottomInPanel = (el, panelEl) => {
+    let y = el.offsetHeight;
+    let cur = el;
+    while (cur && cur !== panelEl) {
+      y += cur.offsetTop;
+      cur = cur.offsetParent;
     }
+    return y;
   };
-  window.visualViewport.addEventListener("resize", syncMobileViewport);
-  window.visualViewport.addEventListener("scroll", syncMobileViewport);
+
+  syncMobileViewport = () => {
+    const vv = window.visualViewport;
+    const root = document.documentElement;
+    const panelEl = document.getElementById("panel");
+    const layoutH = window.innerHeight || root.clientHeight || 0;
+    const vvH = Math.round(vv?.height || layoutH);
+    const vvKeyboardInset = Math.max(0, Math.round(layoutH - vvH));
+    const nativeKeyboardInset = Math.max(0, Math.round(Number(window.__nativeKeyboardInset) || 0));
+    const keyboardInset = Math.max(vvKeyboardInset, nativeKeyboardInset);
+    const keyboardOpen = keyboardInset > KEYBOARD_THRESHOLD;
+    const visibleH = Math.max(0, Math.round(layoutH - (keyboardOpen ? keyboardInset : 0)));
+
+    if (window.scrollY !== 0 || root.scrollTop !== 0 || document.body.scrollTop !== 0) {
+      window.scrollTo(0, 0);
+    }
+    const offsetTop = Math.max(0, Math.round(vv?.offsetTop || 0));
+    root.style.setProperty("--mobile-vv-offset-top", `${offsetTop}px`);
+    if (visibleH > 0) root.style.setProperty("--mobile-visual-height", `${visibleH}px`);
+    root.style.setProperty("--mobile-keyboard-inset", `${keyboardOpen ? keyboardInset : 0}px`);
+
+    const active = document.activeElement;
+    if (active?.id === "main-input" || active?.closest?.(".main-composer")) {
+      lastMobileInputTarget = "main";
+    } else if (active?.id === "memo-input" || active?.closest?.(".memo")) {
+      lastMobileInputTarget = "memo";
+    } else if (
+      !keyboardOpen ||
+      (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT"))
+    ) {
+      lastMobileInputTarget = null;
+    }
+
+    let composerLift = 0;
+    let memoLift = 0;
+
+    if (keyboardOpen && panelEl) {
+      if (lastMobileInputTarget === "main") {
+        const composer = app.querySelector(".main-composer");
+        if (composer) {
+          composerLift = Math.max(
+            0,
+            Math.round(untransformedBottomInPanel(composer, panelEl) - (visibleH - KEYBOARD_GAP))
+          );
+        }
+      } else if (lastMobileInputTarget === "memo") {
+        const memo = app.querySelector(".memo");
+        if (memo) {
+          memoLift = Math.max(
+            0,
+            Math.round(untransformedBottomInPanel(memo, panelEl) - (visibleH - KEYBOARD_GAP))
+          );
+        }
+      }
+    }
+
+    root.style.setProperty("--mobile-composer-lift", `${composerLift}px`);
+    root.classList.toggle("mobile-composer-lifted", composerLift > 0);
+    root.style.setProperty("--mobile-memo-lift", `${memoLift}px`);
+    root.classList.toggle("mobile-memo-lifted", memoLift > 0);
+  };
+
+  window.visualViewport?.addEventListener("resize", syncMobileViewport);
+  window.visualViewport?.addEventListener("scroll", syncMobileViewport);
+  window.addEventListener("scroll", syncMobileViewport, { passive: true });
+  window.addEventListener("floatingtodo-keyboard-inset", syncMobileViewport);
+  document.addEventListener("focusin", () => {
+    syncMobileViewport();
+    requestAnimationFrame(syncMobileViewport);
+  });
+  document.addEventListener("focusout", () => {
+    setTimeout(syncMobileViewport, 60);
+  });
   syncMobileViewport();
 }
 

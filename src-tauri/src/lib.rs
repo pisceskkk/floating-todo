@@ -165,6 +165,7 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .manage(lan::LanState::default())
+        .manage(updates::UpdateState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init());
@@ -188,6 +189,7 @@ pub fn run() {
             sync_storage::sync_set_password,
             sync_storage::dav_request,
             updates::check_for_updates,
+            updates::install_update,
             updates::installed_version,
             widget_core::widget_snapshot,
             widget_core::widget_toggle,
