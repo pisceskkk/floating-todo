@@ -16,6 +16,7 @@ class MainActivity : TauriActivity() {
   private var multicastLock: WifiManager.MulticastLock? = null
   private var pendingDeepLink: String? = null
   private var webViewRef: WebView? = null
+  private var lastKeyboardInsetCssPx: Int = -1
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -41,15 +42,29 @@ class MainActivity : TauriActivity() {
     webView.setBackgroundColor(bgColor)
     window.decorView.setBackgroundColor(bgColor)
 
-    // Apply system bars, display cutout, and IME insets so edge-to-edge never overlaps
-    // status/navigation bars even on Android WebViews where CSS env(safe-area-inset-*) is 0.
+    // Apply only system bars and display cutout insets to the WebView padding so the page
+    // itself stays fixed in place when the IME opens; forward the IME height to JS so only
+    // the active composer is lifted above the keyboard.
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
       val bars = insets.getInsets(
         WindowInsetsCompat.Type.systemBars() or
-          WindowInsetsCompat.Type.displayCutout() or
-          WindowInsetsCompat.Type.ime()
+          WindowInsetsCompat.Type.displayCutout()
       )
       view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+
+      val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+      val imeBottomPx = maxOf(0, ime.bottom - bars.bottom)
+      val density = view.resources.displayMetrics.density.coerceAtLeast(1f)
+      val imeBottomCssPx = (imeBottomPx / density).toInt()
+      if (imeBottomCssPx != lastKeyboardInsetCssPx) {
+        lastKeyboardInsetCssPx = imeBottomCssPx
+        view.post {
+          webView.evaluateJavascript(
+            "window.__nativeKeyboardInset=$imeBottomCssPx;window.dispatchEvent(new CustomEvent('floatingtodo-keyboard-inset',{detail:$imeBottomCssPx}));",
+            null
+          )
+        }
+      }
       insets
     }
     ViewCompat.requestApplyInsets(webView)

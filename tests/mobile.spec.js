@@ -61,3 +61,101 @@ test('mobile mode locks fullscreen panel, hides desktop controls, and handles de
   await page.locator('.row', { hasText: '移动端验收任务' }).locator('.check').click();
   await expect(page.locator('.row', { hasText: '移动端验收任务' })).toHaveClass(/done/);
 });
+
+test('iOS keyboard lifts only the main composer without pushing up the rest of the UI', async ({ page }) => {
+  await page.addInitScript(() => {
+    const listeners = { resize: new Set(), scroll: new Set() };
+    const state = { width: 390, height: 844, offsetTop: 0, offsetLeft: 0, pageTop: 0, pageLeft: 0, scale: 1 };
+    const vv = {
+      get width() { return state.width; },
+      get height() { return state.height; },
+      get offsetTop() { return state.offsetTop; },
+      get offsetLeft() { return state.offsetLeft; },
+      get pageTop() { return state.pageTop; },
+      get pageLeft() { return state.pageLeft; },
+      get scale() { return state.scale; },
+      addEventListener(type, fn) { listeners[type]?.add(fn); },
+      removeEventListener(type, fn) { listeners[type]?.delete(fn); },
+    };
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    window.__setMockVisualViewport = (next) => {
+      Object.assign(state, next);
+      listeners.resize.forEach(fn => fn());
+      listeners.scroll.forEach(fn => fn());
+    };
+  });
+
+  await page.goto('/');
+
+  const beforePanel = await page.locator('#panel').boundingBox();
+  const beforeHeader = await page.locator('.header').boundingBox();
+  const beforeDayPicker = await page.locator('.day-picker').boundingBox();
+  const beforeEmpty = await page.locator('.empty').boundingBox();
+  const beforeComposer = await page.locator('.main-composer').boundingBox();
+
+  // Focus main input and simulate iOS keyboard opening (height 844 -> 508, WKWebView offsetTop 0)
+  await page.locator('#main-input').focus();
+  await page.evaluate(() => window.__setMockVisualViewport({ height: 508, offsetTop: 0 }));
+
+  await expect(page.locator('html')).toHaveClass(/mobile-composer-lifted/);
+  await expect.poll(async () => {
+    const box = await page.locator('.main-composer').boundingBox();
+    return Math.round(box.y + box.height);
+  }).toBe(498);
+
+  const afterPanel = await page.locator('#panel').boundingBox();
+  const afterHeader = await page.locator('.header').boundingBox();
+  const afterDayPicker = await page.locator('.day-picker').boundingBox();
+  const afterEmpty = await page.locator('.empty').boundingBox();
+  const afterComposer = await page.locator('.main-composer').boundingBox();
+
+  // Panel and surrounding UI stay completely stationary (not shrunk or pushed up)
+  expect(Math.round(afterPanel.height)).toBe(Math.round(beforePanel.height));
+  expect(Math.round(afterHeader.y)).toBe(Math.round(beforeHeader.y));
+  expect(Math.round(afterDayPicker.y)).toBe(Math.round(beforeDayPicker.y));
+  expect(Math.round(afterEmpty.y)).toBe(Math.round(beforeEmpty.y));
+
+  // Only the main composer is lifted to sit right above the keyboard (508 - 10 = 498)
+  expect(afterComposer.y).toBeLessThan(beforeComposer.y - 250);
+  expect(Math.round(afterComposer.y + afterComposer.height)).toBe(498);
+
+  // Simulate iOS WKWebView panning visualViewport.offsetTop > 0: panel compensates via top offset
+  await page.evaluate(() => window.__setMockVisualViewport({ height: 508, offsetTop: 120 }));
+  await expect.poll(async () => page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--mobile-vv-offset-top').trim()
+  )).toBe('120px');
+
+  // Keyboard closes: everything returns to resting state
+  await page.evaluate(() => window.__setMockVisualViewport({ height: 844, offsetTop: 0 }));
+
+  await expect(page.locator('html')).not.toHaveClass(/mobile-composer-lifted/);
+  await expect.poll(async () => {
+    const box = await page.locator('.main-composer').boundingBox();
+    return Math.round(box.y);
+  }).toBe(Math.round(beforeComposer.y));
+
+  // Android native IME inset bridge (without shrinking visualViewport) lifts only the main composer
+  await page.locator('#main-input').focus();
+  await page.evaluate(() => {
+    window.__nativeKeyboardInset = 320;
+    window.dispatchEvent(new CustomEvent('floatingtodo-keyboard-inset', { detail: 320 }));
+  });
+  await expect(page.locator('html')).toHaveClass(/mobile-composer-lifted/);
+  await expect.poll(async () => {
+    const box = await page.locator('.main-composer').boundingBox();
+    return Math.round(box.y + box.height);
+  }).toBe(844 - 320 - 10);
+
+  const androidEmpty = await page.locator('.empty').boundingBox();
+  expect(Math.round(androidEmpty.y)).toBe(Math.round(beforeEmpty.y));
+
+  await page.evaluate(() => {
+    window.__nativeKeyboardInset = 0;
+    window.dispatchEvent(new CustomEvent('floatingtodo-keyboard-inset', { detail: 0 }));
+  });
+  await expect(page.locator('html')).not.toHaveClass(/mobile-composer-lifted/);
+  await expect.poll(async () => {
+    const box = await page.locator('.main-composer').boundingBox();
+    return Math.round(box.y);
+  }).toBe(Math.round(beforeComposer.y));
+});
