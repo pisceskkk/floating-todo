@@ -1,201 +1,200 @@
 <div align="center">
 
-<img src="docs/images/banner.svg" alt="floating todo — desktop task widget" width="100%" />
+# floating todo · 悬浮待办
 
-# floating todo
+**A lightweight, always-on, offline-first cross-platform floating todo & habit widget**
 
-[简体中文](README.md) | [English](README.en.md)
+Focused on **Today / Tomorrow / Day After** · Available on **macOS / Windows / Android / iOS** · Zero ads, no account required · Decentralized sync via **Iroh P2P / LAN / Tailscale / WebDAV**
 
-**A translucent, always-on-top desktop task widget for macOS and Windows.**
+[简体中文](README.md) · [English](README.en.md) · [Downloads](https://github.com/pisceskkk/floating-todo/releases)
 
-Keep today, tomorrow, and the day after tomorrow in view. Capture tasks with a global shortcut, get reminders, and track daily habits. Works offline by default, with optional WebDAV, LAN, and Tailscale synchronization. No application account or ads.
-
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2767c8)](#download-and-install)
-[![Tauri](https://img.shields.io/badge/built%20with-Tauri%202-ffc131?logo=tauri&logoColor=white)](https://tauri.app)
-[![Release](https://img.shields.io/github/v/release/pisceskkk/floating-todo?include_prereleases)](../../releases)
-[![Stars](https://img.shields.io/github/stars/pisceskkk/floating-todo?style=social)](../../stargazers)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-2767c8)](#-platforms--installation)
+[![Tauri](https://img.shields.io/badge/built%20with-Tauri%202%20%2B%20Rust-ffc131?logo=tauri&logoColor=white)](https://tauri.app)
+[![Release](https://img.shields.io/github/v/release/pisceskkk/floating-todo?include_prereleases)](https://github.com/pisceskkk/floating-todo/releases)
+[![Stars](https://img.shields.io/github/stars/pisceskkk/floating-todo?style=social)](https://github.com/pisceskkk/floating-todo/stargazers)
 
 </div>
 
-## About
+---
 
-floating todo keeps a small task list visible in a corner of your desktop while you write, work, or meet. Data is stored locally, and synchronization is optional. Its three-day view keeps planning focused on the near term.
+## ✨ Visual Preview
 
-This is a free, open-source project. If it helps you, a star, bug report, or contribution is welcome.
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/ui-main-light.png" alt="Light theme main panel" width="320" /><br />
+      <sub><b>Light Panel</b>: 3-day view · Daily habit streaks · Project tints · Clickable links</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/ui-main-dark.png" alt="Dark theme main panel with memo" width="320" /><br />
+      <sub><b>Dark Panel</b>: System/manual light & dark themes · Collapsible global memo</sub>
+    </td>
+  </tr>
+</table>
 
-<div align="center">
-<img src="docs/images/widget.svg" alt="Desktop widget preview" width="330" />
-</div>
+---
 
-The application interface and illustrated previews currently use Chinese. This English README describes the existing features; it does not imply an English interface or English natural-language date parsing.
+## 🚀 Key Highlights
 
-## Features
+### 1. Three-Day Focus + Daily Habit Streaks
+- **Built for near-term execution**: Focuses strictly on **Today / Tomorrow / Day After Tomorrow**. Overdue unfinished tasks automatically roll over to Today at midnight—nothing slips through the cracks, and no endless backlog piles up.
+- **Tasks and habits unified**: Pin any task as a recurring **Daily** habit with automatic streak tracking (🔥) and a lightweight confetti celebration on completion.
+- **Global memo**: Optional collapsible scratchpad at the bottom of the panel for meeting links, quick notes, and ideas.
 
-### Tasks and daily habits
+### 2. Natural-Language Quick Capture + Global Shortcut
+- **Zero context switching**: Press `⌘⇧Space` (macOS) or `Ctrl+Shift+Space` (Windows) from any app to summon the widget and focus the input immediately.
+- **Natural-language parsing**: Type `明天 下午3点半 提交周报 +工作 #高优` (or `明天 15:30 ...`) to automatically schedule the day, set a `15:30` local notification reminder, assign a project, and attach tags.
+- **`+Project` / `#Tag` organization**: Live keyboard autocomplete on `+` or `#`, automatic 8-color palette assignment, and multi-criteria filtering.
 
-- Separate lists for today, tomorrow, and the day after tomorrow.
-- Add, complete, edit, delete, or move tasks between dates. Completed tasks stay below unfinished tasks.
-- Drag a task title or its sorting handle to reorder it. Focus a handle and use `Alt + ↑ / ↓` for keyboard sorting. Manual order is saved for dated and daily lists.
-- Parse Chinese date/time input such as `明天 15:00 提交方案` into tomorrow's list with a 15:00 reminder. Time expressions such as `下午3点半` are also supported.
-- Optional local notification reminders. Reminder preferences remain local to each device.
-- Double-click a title to edit it, or use its menu to edit details, move it, make it a daily task, or delete it.
-- Clickable links in task descriptions.
-- Daily recurring tasks reset each day and track completion streaks, with a celebration effect when completed.
-- Automatic day rollover: tomorrow becomes today, and unfinished tasks carry forward.
-- Clear completed tasks in one action.
+### 3. Multi-Mode Floating Window + Native Platform Polish
+- **Five seamless window modes**: Full panel, auto-compact mode on resize, floating **Mini bar**, expandable **3-recent-tasks** preview (with inline completion), and **Quick Capture** popover—smartly expanding away from screen edges.
+- **Native macOS vibrancy**: Directly manages `NSVisualEffectView` for pixel-aligned corner radius and inset blur, running in macOS Accessory mode (menu bar only, no Dock clutter).
+- **Windows desktop-layer pinning**: Attach the widget to the Windows desktop layer (`WorkerW`) so it stays visible even after pressing `Win+D` (Show Desktop). Supports flat/shadow styling, opacity control, and custom background colors.
+- **Mouse click-through**: Let clicks pass right through the floating widget to apps underneath, and toggle interactivity back anytime from the system tray menu.
 
-### Window and appearance
+<table>
+  <tr>
+    <td align="center" width="46%">
+      <img src="docs/images/ui-mini-tasks.png" alt="Floating mini bar with recent tasks expanded" width="280" /><br />
+      <sub><b>Mini Bar · Recent Tasks</b>: Peek the next 3 tasks and check them off inline</sub>
+    </td>
+    <td align="center" width="54%">
+      <img src="docs/images/ui-mini-quick.png" alt="Floating mini bar with quick capture popover" width="330" /><br />
+      <sub><b>Mini Bar · Quick Capture</b>: Instant natural-language date/time &amp; <code>+project #tag</code> capture</sub>
+    </td>
+  </tr>
+</table>
 
-- Press `⌘⇧Space` on macOS or `Ctrl+Shift+Space` on Windows to show the widget and focus task entry. Use `Esc` to dismiss it.
-- Always-on-top mode, adjustable transparency, custom background color, and system/light/dark appearance.
-- Optional rounded window shadow, remembered across restarts.
-- Resize from window edges and corners; compact mode shows only today's list.
-- **Mini bar:** click the task count at the top right to collapse the panel into a capsule anchored at its top-right corner. You can also shrink it from the bottom-left corner, then continue dragging toward the upper right past its center. Drag its left handle to reposition it, and click the count to restore the full panel and its previous size. The bar shows the date and unfinished count, turning green when no tasks remain.
-- **Quick entry:** click `＋` on the mini bar or press the global shortcut to open a small input card. Select a date, enter a time, project, or tags, then press `Enter` to submit. `Esc` or clicking outside closes the card while retaining an unsent draft.
-- Tray/menu-bar access without occupying the taskbar or Dock.
-- **Windows desktop pinning:** keep the widget visible after `Win+D`. This mode places it in the desktop layer rather than above ordinary windows or full-screen games, and is mutually exclusive with always-on-top mode.
-- Click-through mode lets mouse clicks reach windows underneath; turn it off from the tray menu.
-- Optional launch at login.
-- Settings group window behavior, appearance, categories, synchronization/backups, and notifications separately.
+### 4. Account-Free, Multi-Channel Decentralized Sync
+Powered by local **SQLite (WAL mode)** and an **immutable Revision DAG**, every change is written locally first, works 100% offline, and merges deterministically when online:
+- **LAN / Tailscale / Iroh Cross-Network P2P Sync**:
+  - Automatic LAN discovery via mDNS, Tailscale node discovery via local CLI, and **built-in Iroh cross-network direct/relay sync** (no Tailscale needed; works out of the box with public relays, supports self-hosted relays and environment proxy settings).
+  - Secured with **6-digit rotating pairing codes (60s) / 8-digit fixed codes + SPAKE2 key exchange + AES-256-GCM end-to-end encryption** over authenticated read-only pull & digest notifications.
+- **WebDAV Sync**: Works with standard WebDAV servers (`GET / PUT / MKCOL / PROPFIND` only) with automatic background sync, focus-triggered pulls, and exponential backoff on failures.
+- **Lossless conflict resolution**: Concurrent offline edits to the same item are never silently overwritten—all competing branches are preserved and can be compared, kept, replaced, edited, or saved as a new task in the visual conflict resolver.
 
-<div align="center">
-<img src="docs/images/mini-bar.svg" alt="Mini bar and quick entry previews" width="100%" />
-</div>
+### 5. All Four Platforms + Native Mobile Home Screen Widgets
+- **One Rust + Tauri v2 core across desktop and mobile**: Supports **macOS, Windows, Android, and iOS**.
+- **Tailored mobile UX**: Full-screen layout with Safe Area insets, pinch-zoom prevention, smart soft-keyboard viewport lifting (lifting only the active composer), touch long-press drag-to-reorder, and `floatingtodo://quick-capture` Deep Link launch.
+- **Native Home Screen Widgets**: A shared Rust `widget_core` projection and atomic write engine powers **iOS WidgetKit (App Group shared SQLite)** and **Android AppWidget**, letting you view today's tasks and check them off directly on the home screen without launching the main WebView.
 
-### Projects and tags
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/ui-lan-sync.png" alt="LAN, Tailscale and Iroh cross-network sync panel" width="310" /><br />
+      <sub><b>LAN / Tailscale / Iroh Sync</b>: Short-code pairing · End-to-end encrypted</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/ui-mobile.png" alt="Mobile full-screen layout" width="280" /><br />
+      <sub><b>Mobile Full-Screen View</b>: Safe Area layout · Touch-first · Syncs with desktop</sub>
+    </td>
+  </tr>
+</table>
 
-- Use `+project` and `#tag` while typing, with inline suggestions. Quote names containing spaces or purely numeric names, for example `+"Website Redesign"`.
-- Each task can belong to one project and multiple tags, including recurring daily tasks. Project colors tint task cards; tag colors appear as small dots.
-- Combine project and tag filters within a date. Filters persist when switching dates; clearing completed tasks affects only visible tasks when a filter is active.
-- Rename, recolor, or delete categories in Settings → Projects and tags (`项目与标签`). Backups include categories and colors, and older data migrates automatically.
+### 6. Privacy-First + One-Click In-App Updates
+- **Zero telemetry, zero cloud accounts**: WebDAV passwords and LAN pairing master keys are stored in the OS credential store (macOS Keychain / Windows Credential Manager).
+- **One-click in-app updates**: Desktop builds check GitHub Releases every 6 hours without hitting GitHub API rate limits, featuring live download progress, SHA-256 verification, in-place macOS DMG replacement, and silent Windows NSIS upgrades.
 
-### Notes and backups
+---
 
-- A shared memo independent of the selected day, saved automatically.
-- Export JSON backups with revision history. Import previews and merges data while preserving items unique to the current device.
+## 🧩 Full Feature Matrix
 
-### WebDAV synchronization
+| Category | Capabilities |
+| :--- | :--- |
+| **Task Management** | Today / Tomorrow / Day After views · Midnight overdue rollover · Move across days · Task descriptions with auto-linkified URLs · Clear completed |
+| **Habit Tracking** | Persistent **Daily** section · Per-day completion history · Streak counter (🔥) · One-click convert between one-off task and daily habit |
+| **Input & Classification** | Natural-language day & time parsing (`15:00`, `下午3点半`, etc.) · `+project` & `#tag` tokens (with quoted multi-word names) · Live autocomplete · Category manager & combined filtering |
+| **Ordering & Interaction** | Pointer-event drag-and-drop (WebView-safe) · Keyboard `Alt + ↑ / ↓` reordering · Touch long-press drag on mobile · Reordering scoped within incomplete/completed groups |
+| **Desktop Windowing** | Borderless 8-edge resize · Auto-compact mode · Mini bar / stack peek / 3-task preview / Quick Capture · Always-on-top · Windows desktop layer (`Win+D` persistent) · Click-through · Launch at login · System tray |
+| **Appearance** | System / Light / Dark themes · Frosted glass (macOS native `NSVisualEffectView`) & flat shadow modes · Window shadow toggle · Opacity slider (20%–95%) · Custom background tint |
+| **Sync & Backup** | Local SQLite (WAL) + Revision DAG · LAN mDNS / Tailscale / Iroh P2P encrypted sync · WebDAV sync · Visual conflict resolution · JSON backup export & diff-previewed merge import |
+| **Reminders & Updates** | Local scheduled OS notifications (toggleable) · Automatic update check & one-click in-app install on desktop |
 
-- Configure your own WebDAV endpoint and sync space in Settings → WebDAV sync and conflicts (`WebDAV 同步与冲突`). Devices using the same space synchronize tasks, projects, tags, habit records, ordering, and the memo.
-- Changes are saved locally first. Automatic sync uploads them when available; offline changes remain queued. View pending uploads, the last successful sync, errors, or trigger a sync manually.
-- Independent edits merge automatically, and duplicate revisions do not create duplicate tasks. Window appearance and local reminder settings stay device-specific.
-- Concurrent changes to the same item retain their branches, displaying the latest state under the version model's deterministic ordering. Keep the current state, restore another version, edit a resolution, or save a conflicting task as a new task.
-- WebDAV passwords are stored in macOS Keychain or Windows Credential Manager. **WebDAV files are not end-to-end encrypted:** use a trusted service. See the [WebDAV protocol and usage guide](docs/webdav-sync.md) (Chinese).
+> For detailed technical specifications (currently written in Chinese):
+> - [LAN, Tailscale & Iroh Sync Guide](docs/lan-sync.md)
+> - [WebDAV Sync Protocol & Data Model](docs/webdav-sync.md)
+> - [Mobile & Native Widget Architecture](docs/mobile-architecture.md)
 
-### LAN and Tailscale synchronization
+---
 
-- **Device discovery:** enable Settings → Sync and backup → LAN and Tailscale sync (`局域网与 Tailscale 同步`) on both devices to find peers on your LAN or Tailscale/Headscale network. Devices use their computer names by default; manual IPv4 lookup is also available.
-- **Code pairing:** enter the other device's six-digit temporary code or persistent eight-digit code. Temporary codes refresh every 60 seconds; fixed codes survive restarts. Refresh codes or revoke individual pairings from settings.
-- **Shared task data:** pairing merges both devices' complete tasks, projects, tags, habit records, ordering, and memo. Concurrent edits retain their versions for review and recovery in settings.
-- **Automatic synchronization:** saved changes notify paired devices, periodic checks catch missed updates, and synchronization resumes after reconnection. Enable WebDAV alongside LAN sync to pass updates between devices using either connection.
-- **Encrypted transfer:** data is encrypted between paired devices. Pairing credentials are encrypted locally, with their key stored in macOS Keychain or Windows Credential Manager.
-- **Optional setup:** disabled by default. Allow local-network access and inbound TCP 47831. Tailscale/Headscale requires a signed-in local client and network rules that allow connections between devices. See the [LAN sync usage guide](docs/lan-sync.md#使用) (Chinese).
+## ⌨️ Shortcuts & Quick Syntax
 
-### Update checks
+| Shortcut / Syntax | Behavior |
+| :--- | :--- |
+| `⌘⇧Space` (macOS) / `Ctrl+Shift+Space` (Windows) | Summon the floating window from anywhere and focus Quick Capture |
+| `明天 15:00 评审方案 +工作 #高优` | Schedule for tomorrow at `15:00`, assign project `工作` and tag `高优` |
+| `+"Project Name"` / `#"High Priority"` | Quote project or tag names containing spaces |
+| `Enter` / `Esc` | Submit task / Cancel edit or collapse to the floating Mini bar |
+| `Alt + ↑` / `Alt + ↓` | Reorder tasks with keyboard when focused on a drag handle |
+| `floatingtodo://quick-capture` | Deep Link to open the app directly into Quick Capture |
 
-- **New version alerts:** checks after startup and every six hours while running. A new version displays a prompt and a dot on the settings button.
-- **Installed version:** view your current version even offline in Settings → Application updates (`应用更新`), or check for updates manually.
-- **Download access:** open the matching [Release page](https://github.com/pisceskkk/floating-todo/releases) from settings, download the installer for your platform, and install the new version.
-- **Update channels:** stable versions receive stable updates; RC versions also receive newer RC releases. If a check fails, view the reason in settings and retry later.
+---
 
-## Download and install
+## 📦 Platforms & Installation
 
-Download an installer from [Releases](../../releases):
+Download the latest release for your platform from [**GitHub Releases**](https://github.com/pisceskkk/floating-todo/releases):
 
-| Platform | Download filename | Requirement |
-| --- | --- | --- |
-| macOS, Apple silicon | `floating-todo_x.x.x_aarch64.dmg` | Apple M-series chip |
-| macOS, Intel | `floating-todo_x.x.x_x64.dmg` | Intel processor |
-| Windows | `floating-todo_x.x.x_x64-setup.exe` | 64-bit Windows 10/11 |
+| Platform | Package / Artifact | Notes |
+| :--- | :--- | :--- |
+| **macOS** | `*_aarch64.dmg` (Apple Silicon) / `*_x64.dmg` (Intel) | Native vibrancy, menu-bar Accessory mode, one-click in-app updates |
+| **Windows** | `*_x64-setup.exe` | Desktop-layer pinning (`Win+D` persistent), silent in-app updates |
+| **Android** | `*_android-arm64.apk` | Full-screen touch UI, WebDAV / LAN / Iroh sync |
+| **iOS** | `*_ios-unsigned.ipa` | Unsigned IPA (sideload or build via Xcode), includes WidgetKit extension |
 
-The application and installer product name is **floating todo**. GitHub download assets use the `floating-todo_` prefix; the installed macOS bundle is `floating todo.app`.
+<details>
+<summary><b>First-launch notes (macOS Gatekeeper / Windows SmartScreen)</b></summary>
 
-When upgrading from the former Chinese bundle name, quit the old app, drag the new app into Applications, then remove `悬浮待办.app` to avoid running two copies. The application identifier is unchanged, so existing task data and credentials remain in use.
+- **macOS**: Releases use ad-hoc signing. If macOS reports the app is "damaged" or from an unidentified developer after moving it to Applications, run:
+  ```sh
+  xattr -dr com.apple.quarantine "/Applications/floating todo.app"
+  ```
+- **Windows**: If Windows Defender SmartScreen prompts on first launch, click **More info → Run anyway**.
 
-### macOS first launch
+</details>
 
-Builds use ad-hoc signing. This allows checking the bundle's integrity but does not authenticate the developer or provide Apple notarization. macOS may require permission under System Settings → Privacy & Security.
+---
 
-If macOS reports that the app is damaged, first verify the installed bundle:
+## 🛠️ Architecture & Local Development
 
-```bash
-codesign --verify --deep --strict --verbose=2 "/Applications/floating todo.app"
-```
-
-An error such as `code has no resources but signature indicates they must be present` indicates an incomplete signature. Use a corrected build or rebuild from trusted source. Removing quarantine does not fix a broken signature.
-
-For a trusted older build that needs a temporary local repair, re-sign the complete bundle and verify it before removing its download quarantine:
-
-```bash
-codesign --force --sign - "/Applications/floating todo.app"
-codesign --verify --deep --strict --verbose=2 "/Applications/floating todo.app"
-# Only after verification succeeds:
-xattr -dr com.apple.quarantine "/Applications/floating todo.app"
-```
-
-Re-signing does not verify the download's origin. Developer ID signing and Apple notarization remain on the roadmap. See [Tauri's macOS signing documentation](https://v2.tauri.app/distribute/sign/macos/).
-
-### Windows first launch
-
-The app does not currently use a paid Windows code-signing certificate. For a trusted download blocked by SmartScreen, select **More info → Run anyway**.
-
-## Build and contribute
-
-Install Node.js 20+, Rust, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
-
-```bash
-git clone https://github.com/pisceskkk/floating-todo.git
-cd floating-todo
-npm ci
-npm run dev       # Development mode
-npm run build     # Platform installers
-```
-
-Pushing a `v*` tag triggers macOS and Windows builds through [GitHub Actions](.github/workflows/release.yml). The macOS release check mounts the final DMG read-only and verifies the enclosed `floating todo.app`, application identifier, and complete code signature. It does not depend on the intermediate `.app` directory that Tauri cleans up after a DMG-only build.
-
-Run frontend checks:
-
-```bash
-npm ci
-npm test
-npx playwright install chromium
-npm run test:ui
-```
-
-Set `PLAYWRIGHT_CHANNEL=msedge` on Windows to use installed Edge, or `PLAYWRIGHT_CHANNEL=chrome` to use Chrome. Browser tests start a local preview server. Native notification and file-dialog APIs are mocked; actual system behavior requires desktop testing.
-
-Run native checks and verify a local DMG on macOS:
-
-```bash
-cargo test --manifest-path crates/lan-sync/Cargo.toml --locked
-cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
-npm run build -- --bundles dmg
-bash scripts/verify-macos-dmg.sh src-tauri/target
-```
-
-## Architecture
-
-- **Tauri 2:** Rust backend with the operating system WebView.
-- **Frontend:** plain HTML, CSS, and JavaScript, with no frontend bundling step.
-- **Storage:** local SQLite on desktop, with migration from legacy `localStorage`; optional WebDAV and native LAN sync, with keys in the OS credential store.
-- **Integrations:** global shortcuts, notifications, launch at login, and file dialogs.
+Designed to stay ultra-lightweight: **zero frontend build framework (vanilla ES Modules + CSS) + Tauri v2 + Rust native core**.
 
 ```text
 floating-todo/
-├─ src/                  # Frontend and synchronization UI/model
-├─ src-tauri/            # Rust desktop integration and packaging
-├─ crates/lan-sync/      # Native discovery, pairing, encrypted transport
-├─ scripts/              # Installer verification
-├─ .github/workflows/    # Cross-platform CI and releases
-└─ legacy-macos-swift/   # Archived early Swift implementation
+├── src/                      # Vanilla ES Modules frontend (shared desktop/mobile UI, sync model, classification, ordering)
+├── src-tauri/                # Tauri v2 Rust backend (SQLite storage, WebDAV, updater, native window surfaces, widget_core)
+│   ├── gen/android/          # Android project configuration
+│   └── gen/apple/            # iOS project & TodoWidget (WidgetKit)
+├── crates/lan-sync/          # Standalone Rust sync crate (axum + mDNS + Tailscale + Iroh + SPAKE2 + AES-GCM)
+├── tests/                    # Unit tests (node:test), UI regression (Playwright), and native smoke tests
+└── docs/                     # Sync protocol docs, mobile architecture, and UI screenshots
 ```
 
-## Roadmap
+### Prerequisites
+- **Node.js** 20+
+- **Rust** stable toolchain
+- Platform dependencies per [Tauri v2 Prerequisites](https://v2.tauri.app/start/prerequisites/)
 
-- [ ] macOS notarization and Windows code signing
-- [x] Optional WebDAV sync, offline queues, and recoverable conflicts
-- [x] LAN/Tailscale discovery, code pairing, encrypted sync, and conflict recovery
-- [ ] Customizable global shortcuts
-- [ ] Richer natural-language parsing, including weekly recurrence and relative dates
+### Common Commands
 
-Issues and pull requests are welcome. If floating todo helps you, consider giving it a star.
+```sh
+# 1. Install dependencies
+npm install
+
+# 2. Run desktop app in dev mode
+npm run dev
+
+# 3. Run test suites
+npm test                                                              # JS data model & sync unit tests
+PLAYWRIGHT_CHANNEL=chrome npm run test:ui                             # Playwright UI regression tests
+cargo test --manifest-path crates/lan-sync/Cargo.toml --locked        # LAN / Iroh sync crate tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib --locked        # Tauri backend, SQLite & updater tests
+
+# 4. Build desktop installers
+npm run build
+```
+
+---
+
+## ⭐ Support
+
+If **floating todo** helps keep your day focused and clutter-free, consider giving it a **⭐ Star**—issues and pull requests are always welcome!
